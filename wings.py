@@ -90,8 +90,13 @@ class FrontWing:
         return x_front_mm - R_mm - self.gap_to_wheel_mm - self.chord_mm
 
 
-def build_front_wing(fw: FrontWing, x_front_mm: float, R_mm: float) -> dict:
-    """{'wing': mesh, 'mount': mesh[, 'endplate': mesh]} right halves, metres."""
+def build_front_wing(fw: FrontWing, x_front_mm: float, R_mm: float,
+                     body_half_mesh=None) -> dict:
+    """{'wing': mesh, 'mount': mesh[, 'endplate': mesh]} right halves, metres.
+
+    With the body, the mount runs aft until its whole end face is 1 mm inside
+    it: a carved-back nose left the default mount 0.62 mm short (2026-09-26).
+    """
     sec = naca4(fw.chord_mm, fw.t_frac, fw.camber)
     x_le = fw.x_le(x_front_mm, R_mm)
     out = {"wing": extrude_section(sec, 0.0, fw.half_span_mm, x_le, fw.z_chord_mm, fw.aoa_deg)}
@@ -99,8 +104,16 @@ def build_front_wing(fw: FrontWing, x_front_mm: float, R_mm: float) -> dict:
     t = fw.chord_mm * fw.t_frac
     # Mount: from 30 % chord back to 1 mm past Ref A (so it bonds to the body),
     # half-thickness in y, from inside the wing to 4 mm above it.
-    out["mount"] = box(x_le + 0.3 * fw.chord_mm, ref_a + 1.0, 0.0, fw.mount_t_mm / 2,
-                       fw.z_chord_mm - 0.25 * t, fw.z_chord_mm + t / 2 + 4.0)
+    z0, z1 = fw.z_chord_mm - 0.25 * t, fw.z_chord_mm + t / 2 + 4.0
+    x_end = ref_a + 1.0
+    if body_half_mesh is not None:
+        Y, Z = np.meshgrid(np.linspace(0.05, fw.mount_t_mm / 2, 3), np.linspace(z0, z1, 7))
+        o = np.c_[np.full(Y.size, x_le), Y.ravel(), Z.ravel()] / 1e3
+        hits, idx, _ = body_half_mesh.ray.intersects_location(
+            o, np.tile([1.0, 0, 0], (len(o), 1)), multiple_hits=False)
+        if len(hits) == len(o):       # every ray must find the body
+            x_end = max(x_end, hits[:, 0].max() * 1e3 + 1.0)
+    out["mount"] = box(x_le + 0.3 * fw.chord_mm, x_end, 0.0, fw.mount_t_mm / 2, z0, z1)
     if fw.endplate_h_mm > 0:
         out["endplate"] = box(x_le, x_le + fw.chord_mm, fw.half_span_mm,
                               fw.half_span_mm + fw.endplate_w_mm,

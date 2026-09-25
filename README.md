@@ -23,5 +23,5 @@ Wheel designs (mean inertia per wheel): `carbon_rim_capped` 124.8 g·mm² (defau
 closed, so the rotating-wall CFD is honest), `carbon_rim` 85.6, `abs_light` 117.0,
 `cad_v2` 137.7.
 
-Known limit: the v2 rear wheel-support CAD bottoms out at 1.40 mm, 0.10 mm under
-T3.7. Part 5's legality check reports it.
+The v2 rear wheel-support CAD bottoms out at 1.40 mm, 0.10 mm under T3.7;
+`assembly.build` trims it at 1.51 mm. Change the CAD to match.

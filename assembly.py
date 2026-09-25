@@ -154,6 +154,9 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
     # -- supports and halo (CAD) -------------------------------------------
     sup = [hg.build_wheel_assembly(a, x)[f"{a}_wheel_support_right"]
            for a, x in (("front", x_front_mm), ("rear", x_rear))]
+    # The v2 rear-support CAD bottoms at 1.40 mm; trim it to the T3.7 plane.
+    sup = [trimesh.intersections.slice_mesh_plane(
+        m, [0, 0, 1.0], [0, 0, (cc.TRACK_CLEARANCE_MIN + 0.01) / 1e3], cap=True) for m in sup]
     _export_half(trimesh.util.concatenate(sup), out / "supports.stl")
     surfaces.append({"name": "supports", "stl": str(out / "supports.stl"), "rotating": None})
     halo = hg.build_halo(cc.ref_plane_A(x_front_mm) / 1e3, d_halo_mm)["halo_right"]
@@ -161,7 +164,7 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
     surfaces.append({"name": "halo", "stl": str(out / "halo.stl"), "rotating": None})
 
     # -- front wing --------------------------------------------------------
-    fwm = wg.build_front_wing(front, x_front_mm, R)
+    fwm = wg.build_front_wing(front, x_front_mm, R, body)
     gates.update(wg.front_wing_gates(front, fwm, x_front_mm, R))
     _export_half(trimesh.util.concatenate(list(fwm.values())), out / "fwing.stl")
     surfaces.append({"name": "fwing", "stl": str(out / "fwing.stl"), "rotating": None})
