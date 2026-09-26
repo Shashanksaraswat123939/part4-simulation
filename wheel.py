@@ -37,6 +37,7 @@ MATERIALS = {
     "SLA_tough":     (1.14, 1.9, 0.30, ""),
     "PA12_SLS":      (1.01, 1.7, 0.60, "SLS nylon"),
     "CF_tube_rim":   (1.55, 50.0, 0.15, "rolled carbon tube as the rim only"),
+    "PET_film":      (1.39, 4.0, 0.05, "thermoformed film face cover, not structural"),
 }
 
 
@@ -56,6 +57,7 @@ class Wheel:
     t_cap: float = 0.0
     rim_material: str = "ABS_FDM"
     body_material: str = "ABS_FDM"
+    cap_material: str = ""        # "" = body_material
     # Aero shape, beyond the flat contact width w (so T7.4 is untouched):
     # rounded tyre shoulders of radius s (a printed quarter-torus shell each)
     # and an outboard hubcap bulging `dome` mm (a paraboloid shell).
@@ -98,8 +100,9 @@ class Wheel:
         v = math.pi * (self.r_hub**2 - self.r_bore**2) * self.l_hub
         out["hub"] = (rho_b * v, rho_b * v * (self.r_hub**2 + self.r_bore**2) / 2)
         if self.t_cap:
+            rho_c = MATERIALS[self.cap_material or self.body_material][0] * 1e-3
             v = math.pi * (ri**2 - self.r_hub**2) * self.t_cap
-            out["cap"] = (rho_b * v, rho_b * v * (ri**2 + self.r_hub**2) / 2)
+            out["cap"] = (rho_c * v, rho_c * v * (ri**2 + self.r_hub**2) / 2)
         t_sh = MATERIALS[self.body_material][2]            # thinnest printable shell
         for k in ("shoulder_in", "shoulder_out"):
             s_ = getattr(self, k)
@@ -139,7 +142,8 @@ class Wheel:
     def printable(self):
         return (self.t_rim >= MATERIALS[self.rim_material][2] - 1e-9 and
                 self.b_spoke >= MATERIALS[self.body_material][2] and
-                (self.t_cap == 0 or self.t_cap >= MATERIALS[self.body_material][2]))
+                (self.t_cap == 0 or
+                 self.t_cap >= MATERIALS[self.cap_material or self.body_material][2]))
 
 
 CAD_FRONT = Wheel(w=13.25)
@@ -175,6 +179,18 @@ DESIGNS = {
         Wheel(w=17.1, rim_material="CF_tube_rim", body_material="SLA_standard", t_cap=0.6,
               dome=1.0, **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2))),
 }
+
+
+# The open carbon wheel with its faces closed by 0.10 mm film covers (both
+# faces, dome 1 mm outboard): the CFD shape of carbon_rim_capped at close to
+# carbon_rim's inertia. The rotating-wall CFD cannot resolve open spokes (0.6 mm
+# spokes, 0.2 mm rim against ~1.1 mm cells at medium), so closing them is the
+# measured option.
+DESIGNS["carbon_rim_film"] = tuple(
+    Wheel(w=w, rim_material="CF_tube_rim", body_material="SLA_standard",
+          cap_material="PET_film", t_cap=2 * 0.10, dome=1.0,
+          **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2))
+    for w in (13.1, 17.1))
 
 
 def design(name):

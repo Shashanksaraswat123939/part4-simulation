@@ -139,6 +139,24 @@ def test_nose_cone_is_closed_legal_and_in_the_assembly():
         assert m.bounds[0, 0] * 1e3 >= 30.0 - 20.0 - 1e-6
 
 
+def test_strut_support_is_legal_light_and_in_the_assembly():
+    import tempfile
+    import trimesh
+    import assembly
+    import support as sp
+    with tempfile.TemporaryDirectory() as td:
+        slim = trimesh.creation.box(extents=[0.18, 0.028, 0.019])   # inside the rear wheels
+        slim.apply_translation([0.115, 0.0, 0.013])
+        half = trimesh.intersections.slice_mesh_plane(slim, [0, 1, 0], [0, 0, 0], cap=True)
+        half.export(f"{td}/body.stl", file_type="stl_ascii")
+        a = assembly.build(120.3, 46.0, 43.72, f"{td}/body.stl", f"{td}/asm", support=sp.Strut())
+        g = {k: v for k, v in a["gates"].items() if "support" in k}
+        assert len(g) == 6 and min(g.values()) > 0, g
+        each = a["info"]["support_mass_g_each"]
+        assert all(0.2 < m < 1.0 for m in each), each          # CAD pods are 1.40-1.55 g
+        assert trimesh.load(f"{td}/asm/supports.stl").bounds[0, 1] >= 0
+
+
 if __name__ == "__main__":
     _mod = sys.modules[__name__]
     _fails = 0

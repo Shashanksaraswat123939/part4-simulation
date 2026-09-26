@@ -43,6 +43,7 @@ import component_contract as cc   # noqa: E402
 import wheel as wh                # noqa: E402
 import wings as wg                # noqa: E402
 import nose as ns                 # noqa: E402
+import support as sp              # noqa: E402
 
 SPEED_MPS = 20.0
 SINK_MM = 0.3
@@ -83,7 +84,7 @@ def _full_mass_com(half_meshes, density_g_cm3: float):
 
 
 def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
-                          wheel_design: str) -> dict:
+                          wheel_design, support_kg=(1.396e-3, 1.545e-3)) -> dict:
     """Kwargs for Part 2's FixedHardwareSpec from the REAL parts.
 
     The spec has a single "rear_wing" slot; it carries every aero part here
@@ -100,7 +101,7 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
     halo = hw["halo_geometry"]
     hz = [z for _y, z in halo.cross_section_yz_m]
     f, r = wh.design(wheel_design)
-    sup_f, sup_r = 1.396e-3, 1.545e-3               # v2 CAD supports, each (fixed_hardware)
+    sup_f, sup_r = support_kg                       # each; default = v2 CAD (fixed_hardware)
     mf = 2 * (f.mass * 1e-3 + sup_f)
     mr = 2 * (r.mass * 1e-3 + sup_r)
     xf, xr = x_front_mm / 1e3, (x_front_mm + W_mm) / 1e3
@@ -122,9 +123,10 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
 
 
 def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
-          out_dir: str, wheel_design="carbon_rim_capped",
+          out_dir: str, wheel_design="carbon_rim_film",
           front: wg.FrontWing = wg.FrontWing(), rear: wg.RearWing = wg.RearWing(),
-          rotate_wheels: bool = True, nose: "ns.NoseCone | None" = None) -> dict:
+          rotate_wheels: bool = True, nose: "ns.NoseCone | None" = None,
+          support: "sp.Strut | None" = None) -> dict:
     import trimesh
     import hardware_geometry as hg
     out = Path(out_dir)
@@ -154,12 +156,23 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
     gates["T7.2_front_gap"] = 2 * FY - cc.FRONT_GAP_MIN
     gates["T7.2_rear_gap"] = 2 * RY - cc.REAR_GAP_MIN
 
-    # -- supports and halo (CAD) -------------------------------------------
-    sup = [hg.build_wheel_assembly(a, x)[f"{a}_wheel_support_right"]
-           for a, x in (("front", x_front_mm), ("rear", x_rear))]
-    # The v2 rear-support CAD bottoms at 1.40 mm; trim it to the T3.7 plane.
-    sup = [trimesh.intersections.slice_mesh_plane(
-        m, [0, 0, 1.0], [0, 0, (cc.TRACK_CLEARANCE_MIN + 0.01) / 1e3], cap=True) for m in sup]
+    # -- supports: v2 CAD, or the parametric strut ------------------------
+    support_kg = (1.396e-3, 1.545e-3)
+    if support is None:
+        sup = [hg.build_wheel_assembly(a, x)[f"{a}_wheel_support_right"]
+               for a, x in (("front", x_front_mm), ("rear", x_rear))]
+        # Safety net: the rear CAD bottomed at 1.40 mm before it was fixed.
+        sup = [trimesh.intersections.slice_mesh_plane(
+            m, [0, 0, 1.0], [0, 0, (cc.TRACK_CLEARANCE_MIN + 0.01) / 1e3], cap=True) for m in sup]
+    else:
+        sup, support_kg = [], []
+        for tag, x, y_in, w in (("front", x_front_mm, FY, f.total_width),
+                                ("rear", x_rear, RY, r.total_width)):
+            sm = sp.build_strut(support, x, R - SINK_MM, y_in, w, body)
+            gates.update(sp.strut_gates(support, sm, x, R - SINK_MM, R, tag))
+            sup.append(sm["strut"])
+            support_kg.append(sp.strut_mass_kg(support, sm))
+        support_kg = tuple(support_kg)
     _export_half(trimesh.util.concatenate(sup), out / "supports.stl")
     surfaces.append({"name": "supports", "stl": str(out / "supports.stl"), "rotating": None})
     halo = hg.build_halo(cc.ref_plane_A(x_front_mm) / 1e3, d_halo_mm)["halo_right"]
@@ -207,7 +220,9 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
     gates["T6.2_id_max"] = cc.TETHER_ID_MAX - 4.5
     gates["T3.7_tether_clearance"] = 2.0 - cc.TRACK_CLEARANCE_MIN
 
-    fhk = fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass, wheel_design)
+    fhk = fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass, wheel_design,
+                                support_kg)
+    info["support_mass_g_each"] = [m * 1e3 for m in support_kg]
     result = {
         "W_mm": W_mm, "x_front_mm": x_front_mm, "d_halo_mm": d_halo_mm,
         "wheel_design": wh.summary(wheel_design),
@@ -219,6 +234,7 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
         "failed_gates": sorted(k for k, v in gates.items() if v < -1e-9),
         "front_wing": wg.params_dict(front), "rear_wing": wg.params_dict(rear),
         "nose": None if nose is None else wg.params_dict(nose),
+        "support": None if support is None else wg.params_dict(support),
         "info": info,
     }
     (out / "assembly.json").write_text(json.dumps(result, indent=2, default=list))
@@ -246,7 +262,7 @@ if __name__ == "__main__":
     ap.add_argument("--d-halo", type=float, default=43.72)
     ap.add_argument("--body", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--wheels", default="carbon_rim_capped")
+    ap.add_argument("--wheels", default="carbon_rim_film")
     a = ap.parse_args()
     res = build(a.W, a.x_front, a.d_halo, a.body, a.out, a.wheels)
     print(json.dumps({k: res[k] for k in ("parts_mass_g", "wheel_moi_kg_m2", "failed_gates")},
