@@ -91,9 +91,20 @@ class FrontWing:
     endplate_h_mm: float = 0.0    # 0 = none (measured to hurt, see module doc)
     endplate_w_mm: float = 2.0
     mount_t_mm: float = 3.0       # centreline mount to the body at Ref A
+    # Optional second element (T8.6: up to 3): a flap over the main element's
+    # trailing edge, `flap_overlap_mm` in x and `flap_gap_mm` above it.
+    flap_chord_mm: float = 0.0
+    flap_t_frac: float = 0.26     # 8 mm chord -> 2.1 mm, T8.6.3
+    flap_aoa_deg: float = 20.0
+    flap_overlap_mm: float = 1.0
+    flap_gap_mm: float = 0.5
+
+    @property
+    def total_chord_mm(self) -> float:
+        return self.chord_mm + max(self.flap_chord_mm - self.flap_overlap_mm, 0.0)
 
     def x_le(self, x_front_mm: float, R_mm: float) -> float:
-        return x_front_mm - R_mm - self.gap_to_wheel_mm - self.chord_mm
+        return x_front_mm - R_mm - self.gap_to_wheel_mm - self.total_chord_mm
 
 
 def build_front_wing(fw: FrontWing, x_front_mm: float, R_mm: float,
@@ -108,6 +119,14 @@ def build_front_wing(fw: FrontWing, x_front_mm: float, R_mm: float,
     out = {"wing": extrude_section(sec, 0.0, fw.half_span_mm, x_le, fw.z_chord_mm, fw.aoa_deg)}
     ref_a = cc.ref_plane_A(x_front_mm)
     t = fw.chord_mm * fw.t_frac
+    if fw.flap_chord_mm > 0:
+        import trimesh
+        t2 = fw.flap_chord_mm * fw.flap_t_frac
+        z_te = fw.z_chord_mm + 0.75 * fw.chord_mm * math.sin(math.radians(fw.aoa_deg))
+        flap = extrude_section(naca4(fw.flap_chord_mm, fw.flap_t_frac), 0.0, fw.half_span_mm,
+                               x_le + fw.chord_mm - fw.flap_overlap_mm,
+                               z_te + t / 2 + fw.flap_gap_mm + t2 / 2, fw.flap_aoa_deg)
+        out["wing"] = trimesh.util.concatenate([out["wing"], flap])
     # Mount: from 30 % chord back to 1 mm past Ref A (so it bonds to the body),
     # half-thickness in y, from inside the wing to 4 mm above it.
     z0, z1 = fw.z_chord_mm - 0.25 * t, fw.z_chord_mm + t / 2 + 4.0
@@ -147,7 +166,7 @@ def front_wing_gates(fw: FrontWing, meshes: dict, x_front_mm: float, R_mm: float
     g = {
         "T8.6.1_span": span_margin,
         "T8.6.2_chord_min": fw.chord_mm - cc.FRONT_CHORD_MIN,
-        "T8.6.2_chord_max": cc.FRONT_CHORD_MAX - fw.chord_mm,
+        "T8.6.2_chord_max": cc.FRONT_CHORD_MAX - fw.total_chord_mm,
         "T8.6.3_thick_min": t - cc.WING_THICK_MIN,
         "T8.6.3_thick_max": cc.WING_THICK_MAX - t,
         "T8.5.2_forward_of_ref_A": ref_a - b[1, 0],
@@ -159,6 +178,8 @@ def front_wing_gates(fw: FrontWing, meshes: dict, x_front_mm: float, R_mm: float
         "T8.5.1_mount_height": cc.NOSE_SUPPORT_Z_MAX - meshes["mount"].bounds[1, 2] * 1e3,
         "T8.5.1_mount_half_width": cc.NOSE_SUPPORT_HALF_WIDTH_MAX - meshes["mount"].bounds[1, 1] * 1e3,
     }
+    if fw.flap_chord_mm > 0:
+        g["T8.6.3_flap_thick_min"] = fw.flap_chord_mm * fw.flap_t_frac - cc.WING_THICK_MIN
     if endplate is not None:
         eb = endplate.bounds * 1e3
         g["T8.5.3_endplate_width"] = cc.FRONT_ENDPLATE_WIDTH_MAX - (eb[1, 1] - eb[0, 1])
