@@ -17,6 +17,13 @@ flow, 3 identical base runs spread 0.77 %): front wing at +6 deg incidence
 -5.2 % D20 (front-wheel drag -10 %), +3 deg -3.0 %, +9 deg -2.0 %; minimum
 front section at +6 deg -5.9 %; minimum rear section -5.0 / -6.8 % (both
 solves short of the drift criterion). Minimum sections also save ~2 g.
+
+Rounds 4-6 (converged, 3-5 identical base runs per round): an 8 mm flap at
+30 deg -1.3 to -1.6 % (20 deg -1.2 %); with the 1 mm wheel dome -2.5 to -2.8 %
+over three runs, every one below every base. The minimum rear wing loses 0.5 %
+to the old 16 mm one on its own, but the old one cancels the flap's gain
+(0.401 vs 0.394 N), so the minimum stays. Wider (84 mm), lower (7 mm), higher
+(10 mm) or further forward (8 mm gap) front wings were all 1-4 % worse.
 """
 from __future__ import annotations
 
@@ -93,9 +100,9 @@ class FrontWing:
     mount_t_mm: float = 3.0       # centreline mount to the body at Ref A
     # Optional second element (T8.6: up to 3): a flap over the main element's
     # trailing edge, `flap_overlap_mm` in x and `flap_gap_mm` above it.
-    flap_chord_mm: float = 0.0
+    flap_chord_mm: float = 8.0    # 0 = single element
     flap_t_frac: float = 0.26     # 8 mm chord -> 2.1 mm, T8.6.3
-    flap_aoa_deg: float = 20.0
+    flap_aoa_deg: float = 30.0
     flap_overlap_mm: float = 1.0
     flap_gap_mm: float = 0.5
 

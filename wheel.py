@@ -167,11 +167,13 @@ DESIGNS = {
               **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2)),
         Wheel(w=17.1, rim_material="CF_tube_rim", body_material="SLA_standard",
               **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2))),
+    # + 1 mm outboard hubcap dome: -1.3 to -1.6 % D20 in CFD (3 mm and 4 mm
+    # were worse), 0.1 g.mm2 of inertia
     "carbon_rim_capped": (
         Wheel(w=13.1, rim_material="CF_tube_rim", body_material="SLA_standard", t_cap=0.6,
-              **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2)),
+              dome=1.0, **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2)),
         Wheel(w=17.1, rim_material="CF_tube_rim", body_material="SLA_standard", t_cap=0.6,
-              **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2))),
+              dome=1.0, **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2))),
 }
 
 

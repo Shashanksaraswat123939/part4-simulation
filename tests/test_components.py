@@ -117,7 +117,7 @@ def test_wheel_shoulders_and_dome_are_closed_and_priced():
     assert abs((shaped.bounds[1, 1] - shaped.bounds[0, 1]) * 1e3 - 18.1) < 1e-6
     f = wh.design("carbon_rim_capped")[0]
     g = replace(f, shoulder_out=1.5)
-    assert g.total_width == f.w + 1.5 and g.inertia > f.inertia and g.w == f.w   # T7.4 unchanged
+    assert g.total_width == f.total_width + 1.5 and g.inertia > f.inertia and g.w == f.w   # T7.4 unchanged
 
 
 def test_nose_cone_is_closed_legal_and_in_the_assembly():
