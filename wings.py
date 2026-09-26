@@ -11,6 +11,12 @@ wheels): a flat front wing 5.9 mm ahead of the front wheels cut wheel drag
 6.5 %, exactly its own drag -- net zero. Endplates as tried added 3-6 %. So the
 defaults are a flat, endplate-free front wing and a minimum-drag rear wing;
 the shape parameters are exposed for the optimiser (Part 5).
+
+Defaults re-set 2026-09-26 from part5 sweep.py (medium mesh, all parts in the
+flow, 3 identical base runs spread 0.77 %): front wing at +6 deg incidence
+-5.2 % D20 (front-wheel drag -10 %), +3 deg -3.0 %, +9 deg -2.0 %; minimum
+front section at +6 deg -5.9 %; minimum rear section -5.0 / -6.8 % (both
+solves short of the drift criterion). Minimum sections also save ~2 g.
 """
 from __future__ import annotations
 
@@ -75,10 +81,10 @@ def box(x0, x1, y0, y1, z0, z1):
 
 @dataclass(frozen=True)
 class FrontWing:
-    chord_mm: float = 20.0
-    t_frac: float = 0.15          # 3.0 mm at 20 mm chord
+    chord_mm: float = 15.0        # T8.6.2 minimum
+    t_frac: float = 0.14          # 2.1 mm, T8.6.3 minimum + 0.1
     camber: float = 0.0
-    aoa_deg: float = 0.0
+    aoa_deg: float = 6.0          # trailing edge up: shields the front wheels
     half_span_mm: float = 38.5    # tip just outboard of the front wheel (36.5)
     z_chord_mm: float = 8.0       # chord line height above the track
     gap_to_wheel_mm: float = 5.5  # TE to front-wheel leading edge (T7.9.1 >= 5)
@@ -164,8 +170,8 @@ def front_wing_gates(fw: FrontWing, meshes: dict, x_front_mm: float, R_mm: float
 
 @dataclass(frozen=True)
 class RearWing:
-    chord_mm: float = 16.0
-    t_frac: float = 0.15          # 2.4 mm
+    chord_mm: float = 15.0        # T9.5.2 minimum
+    t_frac: float = 0.14          # 2.1 mm, T9.5.3 minimum + 0.1
     camber: float = 0.0
     aoa_deg: float = 0.0
     half_span_mm: float = 26.0    # 52 mm unbroken span (T9.5.1 >= 50)
