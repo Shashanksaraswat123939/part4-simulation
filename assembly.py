@@ -42,6 +42,7 @@ for _p in ("part1-simulation", "part2-simulation"):
 import component_contract as cc   # noqa: E402
 import wheel as wh                # noqa: E402
 import wings as wg                # noqa: E402
+import nose as ns                 # noqa: E402
 
 SPEED_MPS = 20.0
 SINK_MM = 0.3
@@ -103,7 +104,7 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
     mf = 2 * (f.mass * 1e-3 + sup_f)
     mr = 2 * (r.mass * 1e-3 + sup_r)
     xf, xr = x_front_mm / 1e3, (x_front_mm + W_mm) / 1e3
-    aero = [v for k, v in parts_mass.items() if k in ("fwing", "rwing", "tethers")]
+    aero = [v for k, v in parts_mass.items() if k in ("fwing", "rwing", "tethers", "nose")]
     m_aero = sum(m for m, _c in aero)
     c_aero = tuple(sum(m * c[i] for m, c in aero) / m_aero for i in range(3)) if m_aero else (rear_face, 0, 0.05)
     return {
@@ -123,7 +124,7 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
 def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
           out_dir: str, wheel_design="carbon_rim_capped",
           front: wg.FrontWing = wg.FrontWing(), rear: wg.RearWing = wg.RearWing(),
-          rotate_wheels: bool = True) -> dict:
+          rotate_wheels: bool = True, nose: "ns.NoseCone | None" = None) -> dict:
     import trimesh
     import hardware_geometry as hg
     out = Path(out_dir)
@@ -172,6 +173,14 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
     surfaces.append({"name": "fwing", "stl": str(out / "fwing.stl"), "rotating": None})
     parts_mass["fwing"] = _full_mass_com(list(fwm.values()), cc.DENSITY_G_CM3[PART_MATERIAL])
 
+    # -- nose cone (printed, ahead of Ref A) --------------------------------
+    if nose is not None:
+        nm = ns.build_nose(nose, x_front_mm, body)
+        gates.update(ns.nose_gates(nose, nm, x_front_mm))
+        _export_half(nm["nose"], out / "nose.stl")
+        surfaces.append({"name": "nose", "stl": str(out / "nose.stl"), "rotating": None})
+        parts_mass["nose"] = ns.nose_mass_com(nose, nm["_full"])
+
     # -- rear wing ---------------------------------------------------------
     rwm = wg.build_rear_wing(rear, x_front_mm, W_mm, body)
     rparts = {k: rwm[k] for k in ("wing", "pylon")}
@@ -209,6 +218,7 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
         "gates": gates,
         "failed_gates": sorted(k for k, v in gates.items() if v < -1e-9),
         "front_wing": wg.params_dict(front), "rear_wing": wg.params_dict(rear),
+        "nose": None if nose is None else wg.params_dict(nose),
         "info": info,
     }
     (out / "assembly.json").write_text(json.dumps(result, indent=2, default=list))

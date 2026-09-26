@@ -120,6 +120,25 @@ def test_wheel_shoulders_and_dome_are_closed_and_priced():
     assert g.total_width == f.w + 1.5 and g.inertia > f.inertia and g.w == f.w   # T7.4 unchanged
 
 
+def test_nose_cone_is_closed_legal_and_in_the_assembly():
+    import tempfile
+    import trimesh
+    import assembly
+    import nose as ns
+    with tempfile.TemporaryDirectory() as td:
+        slim = trimesh.creation.box(extents=[0.18, 0.034, 0.019])   # car-sized front
+        slim.apply_translation([0.115, 0.0, 0.013])
+        half = trimesh.intersections.slice_mesh_plane(slim, [0, 1, 0], [0, 0, 0], cap=True)
+        half.export(f"{td}/body.stl", file_type="stl_ascii")
+        a = assembly.build(120.3, 46.0, 43.72, f"{td}/body.stl", f"{td}/asm", nose=ns.NoseCone())
+        assert "nose" in [s_["name"] for s_ in a["extra_surfaces"]]
+        nose_gates = {k: v for k, v in a["gates"].items() if "nose_" in k and k != "T8.2_nose_overhang"}
+        assert len(nose_gates) == 4 and min(nose_gates.values()) >= 0, nose_gates
+        assert 1.0 < a["parts_mass_g"]["nose"] < 3.0
+        m = trimesh.load(f"{td}/asm/nose.stl")
+        assert m.bounds[0, 0] * 1e3 >= 30.0 - 20.0 - 1e-6
+
+
 if __name__ == "__main__":
     _mod = sys.modules[__name__]
     _fails = 0
