@@ -56,6 +56,16 @@ class Wheel:
     t_cap: float = 0.0
     rim_material: str = "ABS_FDM"
     body_material: str = "ABS_FDM"
+    # Aero shape, beyond the flat contact width w (so T7.4 is untouched):
+    # rounded tyre shoulders of radius s (a printed quarter-torus shell each)
+    # and an outboard hubcap bulging `dome` mm (a paraboloid shell).
+    shoulder_in: float = 0.0
+    shoulder_out: float = 0.0
+    dome: float = 0.0
+
+    @property
+    def total_width(self):
+        return self.w + self.shoulder_in + self.shoulder_out + self.dome
 
     # ---- mass properties -------------------------------------------------
     def parts(self):
@@ -90,6 +100,17 @@ class Wheel:
         if self.t_cap:
             v = math.pi * (ri**2 - self.r_hub**2) * self.t_cap
             out["cap"] = (rho_b * v, rho_b * v * (ri**2 + self.r_hub**2) / 2)
+        t_sh = MATERIALS[self.body_material][2]            # thinnest printable shell
+        for k in ("shoulder_in", "shoulder_out"):
+            s_ = getattr(self, k)
+            if s_:
+                rc = R - s_ * (1 - 2 / math.pi)            # centroid radius of the arc
+                v = (math.pi / 2 * s_) * 2 * math.pi * rc * t_sh
+                out[k] = (rho_b * v, rho_b * v * rc * rc)
+        if self.dome:
+            a = R - self.shoulder_out
+            v = math.pi * self.dome**2 * t_sh               # extra area of the cap
+            out["dome"] = (rho_b * v, rho_b * v * a * a / 2)
         return out
 
     @property
@@ -154,7 +175,10 @@ DESIGNS = {
 }
 
 
-def design(name: str):
+def design(name):
+    """A design name, or a (front, rear) pair of Wheel passed straight through."""
+    if isinstance(name, tuple):
+        return name
     if name not in DESIGNS:
         raise ValueError(f"unknown wheel design {name!r}; known: {sorted(DESIGNS)}")
     return DESIGNS[name]
@@ -173,7 +197,7 @@ def is_closed(name: str) -> bool:
 def summary(name: str) -> dict:
     f, r = design(name)
     sf, se = min(f.check(CAD_FRONT)), min(r.check(CAD_REAR))
-    return {"design": name, "closed": is_closed(name),
+    return {"design": name if isinstance(name, str) else "custom", "closed": is_closed(name),
             "front": {"R_mm": f.R, "width_mm": f.w, "mass_g": f.mass, "I_gmm2": f.inertia},
             "rear": {"R_mm": r.R, "width_mm": r.w, "mass_g": r.mass, "I_gmm2": r.inertia},
             "mean_I_kg_m2": mean_inertia_kg_m2(name),
@@ -181,14 +205,41 @@ def summary(name: str) -> dict:
 
 
 def cfd_surface(R_mm: float, width_mm: float, x_axle_mm: float, y_inner_mm: float,
-                sink_mm: float = 0.3, sections: int = 128):
-    """Closed-cylinder wheel for CFD, sunk into the track so the contact line
-    meshes (a tangent cylinder gives snappy a zero-thickness gap). Metres."""
+                sink_mm: float = 0.3, sections: int = 128, shoulder_in: float = 0.0,
+                shoulder_out: float = 0.0, dome: float = 0.0):
+    """Closed wheel of revolution for CFD, sunk into the track so the contact
+    line meshes (a tangent cylinder gives snappy a zero-thickness gap). Metres.
+
+    Profile from the inboard face (y_inner) outward: flat face, shoulder arc,
+    flat contact width `width_mm`, shoulder arc, outboard face with a
+    paraboloid dome. Zero shoulders and dome give the plain cylinder."""
     import numpy as np
     import trimesh
-    cyl = trimesh.creation.cylinder(radius=R_mm / 1000, height=width_mm / 1000,
-                                    sections=sections)
-    cyl.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
-    cyl.apply_translation([x_axle_mm / 1000, (y_inner_mm + width_mm / 2) / 1000,
-                           (R_mm - sink_mm) / 1000])
-    return cyl
+
+    def arc(cr, ca, s, t0, t1, n=8):     # centre (radius, axial), angles in rad
+        t = np.linspace(t0, t1, n)
+        return np.c_[cr + s * np.cos(t), ca + s * np.sin(t)]
+
+    R, w, si, so = R_mm, width_mm, shoulder_in, shoulder_out
+    pts = [[0.0, 0.0], [R - si, 0.0]]
+    if si:
+        pts += arc(R - si, si, si, -np.pi / 2, 0.0)[1:].tolist()
+    pts += [[R, si], [R, si + w]]
+    a_end = si + w + so
+    if so:
+        pts += arc(R - so, si + w, so, 0.0, np.pi / 2)[1:].tolist()
+    pts.append([R - so, a_end])
+    if dome:
+        r = np.linspace(R - so, 0.0, 12)[1:]
+        pts += np.c_[r, a_end + dome * (1 - (r / (R - so)) ** 2)].tolist()
+    else:
+        pts.append([0.0, a_end])
+    prof = np.array(pts)
+    prof = prof[np.r_[True, np.any(np.diff(prof, axis=0) != 0, axis=1)]]
+    m = trimesh.creation.revolve(prof / 1000.0, sections=sections)
+    if m.volume < 0:
+        m.invert()
+    # revolve axis z -> car y
+    m.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0]))
+    m.apply_translation([x_axle_mm / 1000, y_inner_mm / 1000, (R - sink_mm) / 1000])
+    return m

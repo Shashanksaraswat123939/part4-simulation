@@ -107,6 +107,19 @@ def test_assembly_writes_patches_masses_and_passes_gates():
         assert back[0]["rotating"]["origin"] == tuple(rot["origin"])
 
 
+def test_wheel_shoulders_and_dome_are_closed_and_priced():
+    from dataclasses import replace
+    import wheel as wh
+    plain = wh.cfd_surface(14.05, 13.1, 46.0, 23.25)
+    shaped = wh.cfd_surface(14.05, 13.1, 46.0, 23.25, shoulder_in=1.5, shoulder_out=1.5, dome=2.0)
+    assert plain.is_watertight and shaped.is_watertight
+    assert abs(plain.volume * 1e9 - 3.14159265 * 14.05**2 * 13.1) < 30   # the old cylinder
+    assert abs((shaped.bounds[1, 1] - shaped.bounds[0, 1]) * 1e3 - 18.1) < 1e-6
+    f = wh.design("carbon_rim_capped")[0]
+    g = replace(f, shoulder_out=1.5)
+    assert g.total_width == f.w + 1.5 and g.inertia > f.inertia and g.w == f.w   # T7.4 unchanged
+
+
 if __name__ == "__main__":
     _mod = sys.modules[__name__]
     _fails = 0

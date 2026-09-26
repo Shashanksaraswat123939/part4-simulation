@@ -21,7 +21,9 @@ the car's drag; a flat front wing 5.5 mm ahead of the front wheels is drag-neutr
 
 Wheel designs (mean inertia per wheel): `carbon_rim_capped` 124.8 g·mm² (default:
 closed, so the rotating-wall CFD is honest), `carbon_rim` 85.6, `abs_light` 117.0,
-`cad_v2` 137.7.
+`cad_v2` 137.7. Aero shape per wheel: `shoulder_in`/`shoulder_out` (rounded tyre
+shoulders beyond the T7.4 contact width) and `dome` (outboard hubcap), priced as
+printed shells; `assembly.build` also takes a `(front, rear)` pair of `Wheel`.
 
 The v2 rear wheel-support CAD bottoms out at 1.40 mm, 0.10 mm under T3.7;
 `assembly.build` trims it at 1.51 mm. Change the CAD to match.

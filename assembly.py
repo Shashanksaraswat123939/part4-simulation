@@ -121,7 +121,7 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
 
 
 def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
-          out_dir: str, wheel_design: str = "carbon_rim_capped",
+          out_dir: str, wheel_design="carbon_rim_capped",
           front: wg.FrontWing = wg.FrontWing(), rear: wg.RearWing = wg.RearWing(),
           rotate_wheels: bool = True) -> dict:
     import trimesh
@@ -138,7 +138,9 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
 
     # -- wheels (rotating closed cylinders) --------------------------------
     for name, x, y_in, w in (("wheelF", x_front_mm, FY, f.w), ("wheelR", x_rear, RY, r.w)):
-        cyl = wh.cfd_surface(R, w, x, y_in, SINK_MM)
+        wd = f if name == "wheelF" else r
+        cyl = wh.cfd_surface(R, w, x, y_in, SINK_MM, shoulder_in=wd.shoulder_in,
+                             shoulder_out=wd.shoulder_out, dome=wd.dome)
         _export_half(cyl, out / f"{name}.stl")
         origin = (x / 1e3, (y_in + w / 2) / 1e3, (R - SINK_MM) / 1e3)
         surfaces.append({"name": name, "stl": str(out / f"{name}.stl"),
