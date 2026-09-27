@@ -52,7 +52,7 @@ TETHER_ID_MIN, TETHER_ID_MAX = 3.5, 6.0    # T6.2
 # ---- materials (g/cm3) ----------------------------------------------------
 DENSITY_G_CM3 = {
     "PLA": 1.24, "ABS": 1.04, "PETG": 1.27, "SLA_resin": 1.15,
-    "nylon_PA12": 1.01, "titanium": 4.43,
+    "nylon_PA12": 1.01, "PA12": 1.01, "titanium": 4.43,
 }
 
 

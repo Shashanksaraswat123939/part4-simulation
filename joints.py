@@ -215,7 +215,7 @@ def machined_body(body_half, joints, x_ref_a_mm: float | None = None):
 OPEN_SIDE = {"supports": "bottom", "fwing": "bottom", "tethers": "bottom",
              "rwing": "top", "nose": "bottom"}
 DENSITY_G_CM3 = {"supports": 1.01, "fwing": 1.24, "rwing": 1.24, "tethers": 1.24,
-                 "nose": 1.24}
+                 "nose": 1.01}
 
 
 def nose_part(body_half, x_ref_a_mm: float, tenon_mm: float = 8.0, tenon_half_w_mm: float = 4.0):

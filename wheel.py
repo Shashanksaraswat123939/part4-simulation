@@ -209,10 +209,72 @@ DESIGNS["carbon_rim_film"] = tuple(
     for w in (13.1, 17.1))
 
 
+@dataclass(frozen=True)
+class MeasuredWheel:
+    """A wheel whose geometry is a CAD mesh: mass and inertia measured from it
+    (x material density) plus the pressed-in bearings. Same interface the
+    assembly uses from Wheel."""
+    R: float
+    w: float
+    mass_part_g: float
+    inertia_part_gmm2: float
+    bearings: int = 2
+    t_cap: float = 0.0
+    shoulder_in: float = 0.0
+    shoulder_out: float = 0.0
+    dome: float = 0.0
+
+    @property
+    def total_width(self):
+        return self.w
+
+    @property
+    def mass(self):
+        return self.mass_part_g + self.bearings * BEARING_G
+
+    @property
+    def inertia(self):
+        m_b = self.bearings * BEARING_G
+        return self.inertia_part_gmm2 + 0.45 * m_b * (BEARING_OD_MM / 2 - 0.4) ** 2
+
+    def check(self, ref):
+        return (1.0, 1.0)
+
+    def printable(self):
+        return True
+
+
+def team_wheels(density_g_cm3: float = 1.01) -> tuple:
+    """The team's wheel geometry (part1 hardware_cad/front_wheel.stl,
+    rear_wheel.stl), printed in SLS PA12 (team spec 2026-09-27), with two
+    3x6x2.5 bearings each. NOTE the STL hub bore is 9 mm; the bearings' OD
+    is 6 mm -- a seat or insert is needed (reported, not modelled)."""
+    from pathlib import Path
+    import numpy as np
+    import trimesh
+    cad = Path(__file__).resolve().parent.parent / "part1-simulation" / "hardware_cad"
+    out = []
+    for name in ("front_wheel.stl", "rear_wheel.stl"):
+        m = trimesh.load(str(cad / name), force="mesh")
+        trimesh.repair.fix_winding(m)
+        trimesh.repair.fix_normals(m)
+        ext = m.bounds[1] - m.bounds[0]
+        ax = int(np.argmin(ext))
+        mc = m.copy()
+        mc.apply_translation(-(m.bounds[0] + m.bounds[1]) / 2)
+        rho = density_g_cm3 * 1e-3                      # g/mm3
+        out.append(MeasuredWheel(R=float(max(np.delete(ext, ax)) / 2), w=float(ext[ax]),
+                                 mass_part_g=abs(m.volume) * rho,
+                                 inertia_part_gmm2=abs(mc.moment_inertia[ax, ax]) * rho))
+    return tuple(out)
+
+
 def design(name):
     """A design name, or a (front, rear) pair of Wheel passed straight through."""
     if isinstance(name, tuple):
         return name
+    if name == "team_stl":
+        return team_wheels()
     if name not in DESIGNS:
         raise ValueError(f"unknown wheel design {name!r}; known: {sorted(DESIGNS)}")
     return DESIGNS[name]

@@ -99,7 +99,8 @@ def test_assembly_writes_patches_masses_and_passes_gates():
             m = trimesh.load(s["stl"])
             assert m.bounds[0, 1] >= -1e-9, s["name"]           # right half only
         rot = r["extra_surfaces"][0]["rotating"]
-        assert abs(rot["omega"] + 20.0 / (14.05e-3)) < 1.0      # rolls, top moves aft
+        R = r["wheel_design"]["front"]["R_mm"]
+        assert abs(rot["omega"] + 20.0 / (R * 1e-3)) < 1.0      # rolls, top moves aft
         fhk = r["fixed_hardware_kwargs"]
         assert 0.001 < fhk["rear_wing_mass_kg"] < 0.012
         assert fhk["wheels_axles_mass_kg"] > 0.005

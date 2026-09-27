@@ -140,7 +140,7 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
 
 
 def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
-          out_dir: str, wheel_design="carbon_rim_film",
+          out_dir: str, wheel_design="team_stl",
           front: wg.FrontWing = wg.FrontWing(), rear: wg.RearWing = wg.RearWing(),
           rotate_wheels: bool = True, nose: "ns.NoseCone | None" = None,
           support: "sp.Strut | None" = None) -> dict:
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     ap.add_argument("--d-halo", type=float, default=43.72)
     ap.add_argument("--body", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--wheels", default="carbon_rim_film")
+    ap.add_argument("--wheels", default="team_stl")
     a = ap.parse_args()
     res = build(a.W, a.x_front, a.d_halo, a.body, a.out, a.wheels)
     print(json.dumps({k: res[k] for k in ("parts_mass_g", "wheel_moi_kg_m2", "failed_gates")},
