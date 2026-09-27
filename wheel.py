@@ -64,6 +64,10 @@ class Wheel:
     shoulder_in: float = 0.0
     shoulder_out: float = 0.0
     dome: float = 0.0
+    # Bearings pressed into the hub (team spec 2026-09-27: 3x6x2.5 mm). With
+    # bearings > 0 the hub is a 6 mm seat with a 0.8 mm printed wall, as long as
+    # the bearing stack, and the bearings' mass (and outer-race inertia) count.
+    bearings: int = 0
 
     @property
     def total_width(self):
@@ -97,8 +101,16 @@ class Wheel:
         if self.plate_fill_extra:
             v2 = math.pi * (ri**2 - self.r_hub**2) * self.t_plate * self.plate_fill_extra
             out["plate_fill"] = (rho_b * v2, rho_b * v2 * (ri**2 + self.r_hub**2) / 2)
-        v = math.pi * (self.r_hub**2 - self.r_bore**2) * self.l_hub
-        out["hub"] = (rho_b * v, rho_b * v * (self.r_hub**2 + self.r_bore**2) / 2)
+        r_bore, r_hub, l_hub = self.r_bore, self.r_hub, self.l_hub
+        if self.bearings:
+            r_bore = BEARING_OD_MM / 2
+            r_hub = r_bore + HUB_WALL_MM
+            l_hub = max(l_hub, self.bearings * BEARING_W_MM)
+            m_b = self.bearings * BEARING_G
+            # the outer race and half the balls turn with the wheel
+            out["bearings"] = (m_b, 0.45 * m_b * (BEARING_OD_MM / 2 - 0.4) ** 2)
+        v = math.pi * (r_hub**2 - r_bore**2) * l_hub
+        out["hub"] = (rho_b * v, rho_b * v * (r_hub**2 + r_bore**2) / 2)
         if self.t_cap:
             rho_c = MATERIALS[self.cap_material or self.body_material][0] * 1e-3
             v = math.pi * (ri**2 - self.r_hub**2) * self.t_cap
@@ -146,6 +158,10 @@ class Wheel:
                  self.t_cap >= MATERIALS[self.cap_material or self.body_material][2]))
 
 
+# 3x6x2.5 mm miniature bearing (MR63 size): ~0.30 g, steel.
+BEARING_ID_MM, BEARING_OD_MM, BEARING_W_MM, BEARING_G = 3.0, 6.0, 2.5, 0.30
+HUB_WALL_MM = 0.8
+
 CAD_FRONT = Wheel(w=13.25)
 CAD_REAR = Wheel(w=17.25)
 
@@ -188,7 +204,7 @@ DESIGNS = {
 # measured option.
 DESIGNS["carbon_rim_film"] = tuple(
     Wheel(w=w, rim_material="CF_tube_rim", body_material="SLA_standard",
-          cap_material="PET_film", t_cap=2 * 0.10, dome=1.0,
+          cap_material="PET_film", t_cap=2 * 0.10, dome=1.0, bearings=2,
           **dict(_LIGHT, t_rim=0.20, t_plate=1.2, l_hub=1.2))
     for w in (13.1, 17.1))
 

@@ -48,6 +48,12 @@ import support as sp              # noqa: E402
 SPEED_MPS = 20.0
 SINK_MM = 0.3
 PART_MATERIAL = "PLA"           # wings, mounts, tether guides: printed, solid
+# Axles: 3 mm (the 3x6x2.5 bearings' bore), one per axle, wheel face to wheel
+# face through the supports. Steel by default; 7.7 g for the pair is a large
+# share of a ballast-free 48 g car, so it is a parameter, not a constant.
+AXLE_D_MM = 3.0
+AXLE_DENSITY_G_CM3 = {"steel": 7.85, "titanium": 4.43, "carbon": 1.55}
+AXLE_MATERIAL = "steel"
 
 
 def _export_half(mesh, path: Path) -> None:
@@ -83,6 +89,12 @@ def _full_mass_com(half_meshes, density_g_cm3: float):
     return 2 * vol * density_g_cm3 * 1e3, (cx, 0.0, cz)
 
 
+def axle_mass_kg(y_inner_mm: float, wheel_width_mm: float) -> float:
+    length = 2 * (y_inner_mm + wheel_width_mm)
+    return (math.pi * (AXLE_D_MM / 2) ** 2 * length * 1e-3
+            * AXLE_DENSITY_G_CM3[AXLE_MATERIAL] * 1e-3)
+
+
 def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
                           wheel_design, support_kg=(1.396e-3, 1.545e-3)) -> dict:
     """Kwargs for Part 2's FixedHardwareSpec from the REAL parts.
@@ -102,8 +114,10 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
     hz = [z for _y, z in halo.cross_section_yz_m]
     f, r = wh.design(wheel_design)
     sup_f, sup_r = support_kg                       # each; default = v2 CAD (fixed_hardware)
-    mf = 2 * (f.mass * 1e-3 + sup_f)
-    mr = 2 * (r.mass * 1e-3 + sup_r)
+    from geometry_contract import FRONT_WHEEL_INNER_Y_MM as FY, REAR_WHEEL_INNER_Y_MM as RY
+    a_f, a_r = axle_mass_kg(FY, f.total_width), axle_mass_kg(RY, r.total_width)
+    mf = 2 * (f.mass * 1e-3 + sup_f) + a_f
+    mr = 2 * (r.mass * 1e-3 + sup_r) + a_r
     xf, xr = x_front_mm / 1e3, (x_front_mm + W_mm) / 1e3
     aero = [v for k, v in parts_mass.items() if k in ("fwing", "rwing", "tethers", "nose")]
     m_aero = sum(m for m, _c in aero)

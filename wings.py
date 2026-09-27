@@ -220,6 +220,18 @@ def body_top_under(body_half_mesh, x0_mm, x1_mm, y1_mm, step_mm: float = 1.0) ->
     return float(locs[:, 2].max() * 1e3) if len(locs) else 0.0
 
 
+def min_body_top_under(body_half_mesh, x0_mm, x1_mm, y1_mm, step_mm: float = 0.5) -> float:
+    """Lowest body top under a footprint (mm); the footprint is assumed to be
+    over the body (points that miss it are ignored)."""
+    xs = np.arange(x0_mm, x1_mm + 1e-9, step_mm)
+    ys = np.arange(0.0, y1_mm + 1e-9, step_mm)
+    X, Y = np.meshgrid(xs, ys)
+    origins = np.c_[X.ravel(), Y.ravel(), np.full(X.size, 200.0)] / 1e3
+    dirs = np.tile([0, 0, -1.0], (len(origins), 1))
+    locs, _, _ = body_half_mesh.ray.intersects_location(origins, dirs, multiple_hits=False)
+    return float(locs[:, 2].min() * 1e3) if len(locs) else 0.0
+
+
 def build_rear_wing(rw: RearWing, x_front_mm: float, W_mm: float, body_half_mesh) -> dict:
     """Wing placed with T9.6 clear air above the body; pylon down to the body."""
     ref_b = cc.ref_plane_B(x_front_mm, W_mm)
@@ -230,8 +242,14 @@ def build_rear_wing(rw: RearWing, x_front_mm: float, W_mm: float, body_half_mesh
     sec = naca4(rw.chord_mm, rw.t_frac, rw.camber)
     wing = extrude_section(sec, 0.0, rw.half_span_mm, x_le, z_chord, rw.aoa_deg)
     xm = x_le + 0.5 * rw.chord_mm
+    # Down to the body directly under the pylon (not the highest point under
+    # the whole wing, which a parametric tail can sit well above), 2 mm in.
+    under = body_top_under(body_half_mesh, xm - rw.pylon_chord_mm / 2,
+                           xm + rw.pylon_chord_mm / 2, rw.pylon_t_mm / 2, step_mm=0.5)
+    low = min_body_top_under(body_half_mesh, xm - rw.pylon_chord_mm / 2,
+                             xm + rw.pylon_chord_mm / 2, rw.pylon_t_mm / 2)
     pylon = box(xm - rw.pylon_chord_mm / 2, xm + rw.pylon_chord_mm / 2, 0.0, rw.pylon_t_mm / 2,
-                top - 2.0, z_chord)
+                min(under, low) - 2.0, z_chord)
     return {"wing": wing, "pylon": pylon, "_body_top_mm": top, "_z_chord_mm": z_chord}
 
 
