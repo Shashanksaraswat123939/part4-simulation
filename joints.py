@@ -41,10 +41,15 @@ class Joint:
     printed: object       # (part - body) ∪ pocket
     pocket_cm3: float
     embedded_cm3: float
+    fill: bool = True             # the printed part fills its pocket (a plug)
 
     def mass_delta_kg(self, part_density_g_cm3: float) -> float:
         """Full-car (both halves) mass change vs 'foam body + whole part',
         which is what the mass rollup counted before joints existed."""
+        if not self.fill:
+            # the part keeps its designed shape inside the slot (the team's
+            # ribbed CAD beam): only the foam cut out of the slot changes
+            return -2 * self.pocket_cm3 * FOAM_G_CM3 * 1e-3
         dv = self.pocket_cm3 * (part_density_g_cm3 - FOAM_G_CM3) \
             - self.embedded_cm3 * part_density_g_cm3
         return 2 * dv * 1e-3
@@ -55,12 +60,46 @@ def _bool(op, meshes):
     return getattr(trimesh.boolean, op)(meshes, engine="manifold")
 
 
-def _footprint(mesh):
-    from shapely.geometry import Polygon
+def _machinable_outline(fp, r):
+    """The pocket outline the ball clears around footprint fp. If fp is
+    already a union of r-discs (every convex corner >= r) it is cut as is;
+    otherwise it is grown by r so the milled pocket still contains it."""
+    opened = fp.buffer(-r).buffer(r)
+    if fp.area > 0 and fp.symmetric_difference(opened).area < 0.02 * fp.area:
+        return fp
+    return fp.buffer(r)
+
+
+def _prism_y(poly_xz, y0_mm, y1_mm):
+    import trimesh
+    parts = [poly_xz] if poly_xz.geom_type == "Polygon" else list(getattr(poly_xz, "geoms", []))
+    out = []
+    for p in parts:
+        if p.area < 1e-6:
+            continue
+        m = trimesh.creation.extrude_polygon(p.simplify(0.05), (y1_mm - y0_mm))
+        # extrude along +z in (x, z)-as-(x, y) coordinates -> rotate so +z_local = +y
+        m.apply_transform(np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1.0]]))
+        m.apply_translation([0, y0_mm, 0])
+        m.apply_scale(1e-3)
+        if m.volume < 0:
+            m.invert()
+        out.append(m)
+    return trimesh.util.concatenate(out) if out else None
+
+
+def _footprint(mesh, axes=(0, 1)):
+    """Projected outline of a mesh on two axes (mm). Holes are filled: the
+    union of projected triangles leaves sliver gaps that are not real, and a
+    pocket outline has none anyway."""
+    from shapely.geometry import Polygon, MultiPolygon
     from shapely.ops import unary_union
-    tri = mesh.vertices[mesh.faces][:, :, :2] * 1e3
+    tri = mesh.vertices[mesh.faces][:, :, list(axes)] * 1e3
     polys = [Polygon(t) for t in tri if abs(np.cross(t[1] - t[0], t[2] - t[0])) > 1e-9]
-    return unary_union(polys)
+    u = unary_union(polys).buffer(0.02).buffer(-0.02)
+    geoms = [u] if u.geom_type == "Polygon" else list(getattr(u, "geoms", []))
+    filled = [Polygon(g.exterior) for g in geoms if g.area > 1e-6]
+    return filled[0] if len(filled) == 1 else MultiPolygon(filled)
 
 
 def _prism(poly, z0_mm, z1_mm):
@@ -91,7 +130,8 @@ def t55_keep_out(x0_mm: float, x1_mm: float, z_axis_mm: float = 35.0,
 
 
 def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
-        tool_r_mm: float = TOOL_R_MM, embed_mm: float | None = 4.0) -> Joint | None:
+        tool_r_mm: float = TOOL_R_MM, embed_mm: float | None = 4.0,
+        fill: bool = True) -> Joint | None:
     """embed_mm: how far into the body the printed part reaches, measured in
     from its outermost embedded point (in y for side parts, z for top/bottom).
     The rest of what the CAD buries in the body is dropped: a CAD support pod
@@ -108,7 +148,7 @@ def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
     if O_full is None or O_full.is_empty or abs(O_full.volume) < 1e-12:
         return None
     O = O_full
-    if embed_mm is not None:
+    if embed_mm is not None and open_side != "side":   # a through-slot takes the whole beam
         b = O_full.bounds * 1e3
         if open_side == "top":           # parts on top: keep the top embed_mm
             slab = trimesh.creation.box(bounds=[[b[0, 0] - 1, -1, (b[1, 2] - embed_mm)],
@@ -123,19 +163,28 @@ def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
         O = _bool("intersection", [O_full, slab])
         if O is None or O.is_empty:
             O = O_full
-    fp = _footprint(O).buffer(tool_r_mm)
-    zb, zt = body_half.bounds[:, 2] * 1e3
-    oz0, oz1 = O.bounds[:, 2] * 1e3
-    plug = _prism(fp, zb - 1.0, oz1) if open_side == "bottom" else _prism(fp, oz0, zt + 1.0)
+    if open_side == "side":
+        # Through-slot along y, machined from the left and right (team setups).
+        fp = _machinable_outline(_footprint(O, (0, 2)), tool_r_mm)
+        plug = _prism_y(fp, 0.0, body_half.bounds[1, 1] * 1e3 + 1.0)
+    else:
+        fp = _machinable_outline(_footprint(O), tool_r_mm)
+        zb, zt = body_half.bounds[:, 2] * 1e3
+        oz0, oz1 = O.bounds[:, 2] * 1e3
+        plug = _prism(fp, zb - 1.0, oz1) if open_side == "bottom" else _prism(fp, oz0, zt + 1.0)
     if plug is None:
         return None
     if keep_out is not None:
         plug = _bool("difference", [plug, keep_out])
     pocket = _bool("intersection", [plug, body_half])
-    outside = _bool("difference", [part, body_half])
-    printed = _bool("union", [outside, pocket])
+    if fill:
+        outside = _bool("difference", [part, body_half])
+        printed = _bool("union", [outside, pocket])
+    else:
+        printed = part
     return Joint(name, open_side, plug, pocket, printed,
-                 pocket_cm3=abs(pocket.volume) * 1e6, embedded_cm3=abs(O_full.volume) * 1e6)
+                 pocket_cm3=abs(pocket.volume) * 1e6, embedded_cm3=abs(O_full.volume) * 1e6,
+                 fill=fill)
 
 
 def machined_body(body_half, joints, x_ref_a_mm: float | None = None):
@@ -158,9 +207,14 @@ def machined_body(body_half, joints, x_ref_a_mm: float | None = None):
 # Which way each printed part's pocket opens. The rear wing sits over the
 # cartridge chamber, where the body is only the 3 mm T5.5 wall: no pocket is
 # possible, so it is surface-bonded (cut() returns None after the keep-out).
+# Supports are ONE piece per axle (team spec): discs and stubs at both ends are
+# wider than the beam, so the beam cannot slide through a side slot -- it drops
+# in from below into a full-width channel, and the printed part includes the
+# keel that fills the channel under the beam (the v2 CAD beam already reaches
+# down to z 4.5 mm, i.e. the team does this).
 OPEN_SIDE = {"supports": "bottom", "fwing": "bottom", "tethers": "bottom",
              "rwing": "top", "nose": "bottom"}
-DENSITY_G_CM3 = {"supports": 1.04, "fwing": 1.24, "rwing": 1.24, "tethers": 1.24,
+DENSITY_G_CM3 = {"supports": 1.01, "fwing": 1.24, "rwing": 1.24, "tethers": 1.24,
                  "nose": 1.24}
 
 
@@ -193,8 +247,11 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
     if np_ is not None:
         parts["nose"] = np_
     joints, report = [], {"parts": {}, "mass_delta_kg": {}}
+    cad_supports = assembly.get("support") is None
     for name, mesh in parts.items():
-        j = cut(name, mesh, milled, OPEN_SIDE.get(name, "bottom"), ko)
+        fill = not (name == "supports" and cad_supports)
+        j = cut(name, mesh, milled, OPEN_SIDE.get(name, "bottom"), ko,
+                embed_mm=None if name == "supports" else 4.0, fill=fill)
         dm = 0.0
         if j is None:
             report["parts"][name] = {"joint": "surface bond (no pocket possible)"}
@@ -205,7 +262,9 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
                 # The nose ahead of Ref A is already in the body's mass (Part 1's
                 # nose density): only its tenon's pocket is new.
                 dm = 2 * j.pocket_cm3 * (DENSITY_G_CM3["nose"] - FOAM_G_CM3) * 1e-3
-            report["parts"][name] = {"joint": f"pocket from the {j.open_side}",
+            report["parts"][name] = {"joint": ("through-slot from the sides" if j.open_side == "side"
+                                               else f"pocket from the {j.open_side}")
+                                     + ("" if j.fill else " (part keeps its own shape)"),
                                      "pocket_cm3_per_side": j.pocket_cm3,
                                      "embedded_cm3_per_side": j.embedded_cm3}
         report["mass_delta_kg"][name] = dm
@@ -220,12 +279,11 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
         report["machined_body_half_stl"] = str(out / "machined_body_half.stl")
         mb.export(report["machined_body_half_stl"])
         for j in joints:
-            if j.name == "supports":                 # separate left/right parts
-                j.printed.export(str(out / f"printed_{j.name}_right.stl"))
-                left = j.printed.copy()
-                left.vertices[:, 1] *= -1
-                left.invert()
-                left.export(str(out / f"printed_{j.name}_left.stl"))
+            if j.name == "supports":                 # one full-width part per axle
+                full = _full(j.printed)
+                pieces = sorted(full.split(only_watertight=False), key=lambda m: m.bounds[0, 0])
+                for tag, piece in zip(("front", "rear"), pieces):
+                    piece.export(str(out / f"printed_support_{tag}.stl"))
             else:                                    # centreline parts: one piece
                 _full(j.printed).export(str(out / f"printed_{j.name}.stl"))
     return report

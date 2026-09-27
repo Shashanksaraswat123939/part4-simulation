@@ -44,6 +44,7 @@ import wheel as wh                # noqa: E402
 import wings as wg                # noqa: E402
 import nose as ns                 # noqa: E402
 import support as sp              # noqa: E402
+import beam_support as bsm        # noqa: E402
 
 SPEED_MPS = 20.0
 SINK_MM = 0.3
@@ -52,8 +53,10 @@ PART_MATERIAL = "PLA"           # wings, mounts, tether guides: printed, solid
 # face through the supports. Steel by default; 7.7 g for the pair is a large
 # share of a ballast-free 48 g car, so it is a parameter, not a constant.
 AXLE_D_MM = 3.0
-AXLE_DENSITY_G_CM3 = {"steel": 7.85, "titanium": 4.43, "carbon": 1.55}
-AXLE_MATERIAL = "steel"
+AXLE_DENSITY_G_CM3 = {"steel": 7.85, "titanium": 4.43, "carbon": 1.55, "none": 0.0}
+# Team spec 2026-09-27: the axles are stubs printed as part of the support (the
+# v2 CAD already has them), bearings pressed on -- no separate axle.
+AXLE_MATERIAL = "none"
 
 
 def _export_half(mesh, path: Path) -> None:
@@ -178,6 +181,17 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
         # Safety net: the rear CAD bottomed at 1.40 mm before it was fixed.
         sup = [trimesh.intersections.slice_mesh_plane(
             m, [0, 0, 1.0], [0, 0, (cc.TRACK_CLEARANCE_MIN + 0.01) / 1e3], cap=True) for m in sup]
+    elif isinstance(support, bsm.BeamSupport):
+        # The team's architecture, parametric: one PA12 beam per axle through
+        # the body, stub axles, optional wheel-face discs.
+        sup, support_kg = [], []
+        for tag, x, y_in, w, disc in (("front", x_front_mm, FY, f.total_width, support.disc_front),
+                                      ("rear", x_rear, RY, r.total_width, support.disc_rear)):
+            bm = bsm.build(support, x, R - SINK_MM, y_in, w, disc)
+            gates.update(bsm.gates(support, bm, x, R - SINK_MM, R, tag))
+            sup.append(bm["support"])
+            support_kg.append(bsm.mass_kg(support, bm) / 2)      # per side
+        support_kg = tuple(support_kg)
     else:
         sup, support_kg = [], []
         for tag, x, y_in, w in (("front", x_front_mm, FY, f.total_width),
