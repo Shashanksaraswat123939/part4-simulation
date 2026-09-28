@@ -286,6 +286,11 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
                     piece.export(str(out / f"printed_support_{tag}.stl"))
             else:                                    # centreline parts: one piece
                 _full(j.printed).export(str(out / f"printed_{j.name}.stl"))
+        if assembly.get("wheel_design", {}).get("design") == "team_stl":
+            # the team's wheels with the 6 mm bearing seat, in the STL's own frame
+            import wheel as wh
+            for tag, (mesh, *_rest) in zip(("front", "rear"), wh.team_wheel_meshes()):
+                mesh.export(str(out / f"printed_wheel_{tag}_x2.stl"))
     return report
 
 

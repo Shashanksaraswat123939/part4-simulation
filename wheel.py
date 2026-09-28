@@ -244,11 +244,32 @@ class MeasuredWheel:
         return True
 
 
-def team_wheels(density_g_cm3: float = 1.01) -> tuple:
-    """The team's wheel geometry (part1 hardware_cad/front_wheel.stl,
-    rear_wheel.stl), printed in SLS PA12 (team spec 2026-09-27), with two
-    3x6x2.5 bearings each. NOTE the STL hub bore is 9 mm; the bearings' OD
-    is 6 mm -- a seat or insert is needed (reported, not modelled)."""
+def _seat_ring(m, ax):
+    """The 6 mm bearing seat added to the team hub: a PA12 ring from the
+    bearing OD out to the STL's own bore, over the hub's own length."""
+    import numpy as np
+    import trimesh
+    c = (m.bounds[0] + m.bounds[1]) / 2
+    v = m.vertices - c
+    r = np.hypot(*np.delete(v, ax, axis=1).T)
+    hub = r < 5.5
+    bore_r = float(r[hub].min())
+    a0, a1 = float(v[hub, ax].min()), float(v[hub, ax].max())
+    ring = trimesh.creation.annulus(r_min=BEARING_OD_MM / 2, r_max=bore_r + 0.05,
+                                    height=a1 - a0, sections=96)
+    if ax != 2:
+        axis = np.eye(3)[ax]
+        rot = trimesh.geometry.align_vectors([0, 0, 1], axis)
+        ring.apply_transform(rot)
+    shift = c.copy()
+    shift[ax] += (a0 + a1) / 2
+    ring.apply_translation(shift)
+    return ring, bore_r, a1 - a0
+
+
+def team_wheel_meshes(density_g_cm3: float = 1.01) -> list:
+    """(front, rear) team wheel meshes WITH the 6 mm bearing seat (team
+    decision 2026-09-28), in the STL's own coordinates (mm)."""
     from pathlib import Path
     import numpy as np
     import trimesh
@@ -258,14 +279,29 @@ def team_wheels(density_g_cm3: float = 1.01) -> tuple:
         m = trimesh.load(str(cad / name), force="mesh")
         trimesh.repair.fix_winding(m)
         trimesh.repair.fix_normals(m)
-        ext = m.bounds[1] - m.bounds[0]
-        ax = int(np.argmin(ext))
-        mc = m.copy()
-        mc.apply_translation(-(m.bounds[0] + m.bounds[1]) / 2)
+        ax = int(np.argmin(m.bounds[1] - m.bounds[0]))
+        ring, bore_r, hub_len = _seat_ring(m, ax)
+        seated = trimesh.boolean.union([m, ring], engine="manifold")
+        out.append((seated, ax, bore_r, hub_len))
+    return out
+
+
+def team_wheels(density_g_cm3: float = 1.01, bearings: int = 1) -> tuple:
+    """The team's wheel geometry (part1 hardware_cad/front_wheel.stl,
+    rear_wheel.stl) in SLS PA12, with the 9 mm hub bore reduced to a 6 mm seat
+    for the 3x6x2.5 bearing (team decision 2026-09-28). The hub is 3 mm long,
+    so it holds ONE 2.5 mm bearing."""
+    import numpy as np
+    out = []
+    for seated, ax, _bore, _len in team_wheel_meshes(density_g_cm3):
+        ext = seated.bounds[1] - seated.bounds[0]
+        mc = seated.copy()
+        mc.apply_translation(-(seated.bounds[0] + seated.bounds[1]) / 2)
         rho = density_g_cm3 * 1e-3                      # g/mm3
         out.append(MeasuredWheel(R=float(max(np.delete(ext, ax)) / 2), w=float(ext[ax]),
-                                 mass_part_g=abs(m.volume) * rho,
-                                 inertia_part_gmm2=abs(mc.moment_inertia[ax, ax]) * rho))
+                                 mass_part_g=abs(seated.volume) * rho,
+                                 inertia_part_gmm2=abs(mc.moment_inertia[ax, ax]) * rho,
+                                 bearings=bearings))
     return tuple(out)
 
 
