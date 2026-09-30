@@ -309,7 +309,12 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
             solid = _full(_bool("union", list(pieces)) if len(pieces) > 1 else mesh)
         made[f"printed_{name}"] = (solid, DENSITY_G_CM3.get(name, 1.24),
                                    2 if name == "tethers" else 1)
-    if "supports" in by:                             # one full-width part per axle
+    no_file = set()
+    if "supports" in by and not by["supports"].fill:
+        # the team's own CAD supports keep their shape: their CAD is the file
+        made["supports_team_cad"] = (_full(by["supports"].printed), DENSITY_G_CM3["supports"], 2)
+        no_file.add("supports_team_cad")
+    elif "supports" in by:                           # one full-width part per axle
         full = _full(by["supports"].printed)
         mid = 0.5 * (full.bounds[0, 0] + full.bounds[1, 0])
         for tag, side in (("front", -1), ("rear", 1)):
@@ -338,7 +343,8 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
         report["machined_body_half_stl"] = str(out.parent / "machined_body_half.stl")
         mb.export(report["machined_body_half_stl"])
         for k, (m, _rho, _n) in made.items():
-            report["manufactured"][k].update(_export_mm(m, out / f"{k}.stl"))
+            if k not in no_file:
+                report["manufactured"][k].update(_export_mm(m, out / f"{k}.stl"))
         if assembly.get("wheel_design", {}).get("design") == "team_stl":
             # the team's wheels with the 6 mm bearing seat, in the STL's own frame (mm)
             import wheel as wh
