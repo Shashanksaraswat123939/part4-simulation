@@ -26,10 +26,14 @@ Written to `manufacture/`, in **millimetres**, both halves, one closed solid per
 | file | what | material |
 |---|---|---|
 | `machined_body.stl` | the body as milled: every pocket cut, ending at Ref A | foam, 0.163 g/cm3 |
-| `printed_support_front.stl`, `printed_support_rear.stl` | one part per axle: beam, stub axles, disc, and the keel that fills the drop-in channel | PA12 |
-| `printed_nose.stl` | hollow cone shell, bulkhead with a 3 mm powder drain, tenon | PA12 |
-| `printed_fwing.stl`, `printed_rwing.stl`, `printed_tethers.stl` | wings with their mounts and plugs; two tether guides | PLA |
+| `printed_front_assembly.stl` | nose cone (hollow shell with bulkhead and a 3 mm powder drain, or solid when `wall_mm` leaves no cavity), front wing, flap and mount, and the tenon: ONE part, because the wing mount runs through the cone | PA12 |
+| `printed_support_front.stl`, `printed_support_rear.stl` | one part per axle: beam, stub axles, disc, the keel that fills the drop-in channel, and that axle's tether guide | PA12 |
+| `printed_rwing.stl` | rear wing and pylon, trimmed at the body surface (surface-bonded: no pocket fits over the cartridge wall) | PLA |
 | `printed_wheel_front_x2.stl`, `printed_wheel_rear_x2.stl` | the team wheels with the bearing seat (print two of each) | PA12 |
+
+No two of these occupy the same space. Before 2026-09-30 the nose, front wing, front
+tether guide and front support were four overlapping files, and 0.85 cm3 of overlap
+was counted twice in the mass.
 
 `make_all` re-reads every file it writes and reports whether it is a closed solid
 with the expected number of pieces, and its mass. `manufactured_g` is the sum: with

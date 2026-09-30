@@ -186,8 +186,19 @@ def test_manufacturing_files_are_whole_closed_parts_in_mm():
         assert load("machined_body")[1, 0] - load("machined_body")[0, 0] > 150     # mm, not m
         f, r = load("printed_support_front"), load("printed_support_rear")
         assert f[1, 0] < 100 < r[0, 0] and f[0, 1] < -20 and f[1, 1] > 20, (f, r)
-        assert load("printed_nose")[0, 0] < 30.0 - 15.0                 # reaches the cone tip
+        # nose cone and front wing are ONE printed part, from the wing's leading
+        # edge past the cone tip to the tenon; tether guides ride on the supports
+        fa = load("printed_front_assembly")
+        assert fa[0, 0] < 30.0 - 15.0 and fa[1, 1] > 30.0 and "printed_tethers" not in made, fa
         assert abs(rep["manufactured_g"] - sum(v["g"] for v in made.values())) < 1e-9
+        # no two manufactured parts may occupy the same space (0.85 cm3 of
+        # overlap was counted twice in the mass, 2026-09-30)
+        solids = {k: trimesh.load(v["file"], force="mesh") for k, v in made.items()}
+        keys = sorted(solids)
+        for i, a_ in enumerate(keys):
+            for b_ in keys[i + 1:]:
+                inter = joints._bool("intersection", [solids[a_], solids[b_]])
+                assert inter.is_empty or abs(inter.volume) < 1.0, (a_, b_, abs(inter.volume))
 
 
 if __name__ == "__main__":

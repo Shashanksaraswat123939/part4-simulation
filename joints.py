@@ -43,6 +43,7 @@ class Joint:
     embedded_cm3: float
     fill: bool = True             # the printed part fills its pocket (a plug)
     plug_full: object = None      # the plug across BOTH halves, for the full machined body
+    part: object = None           # the part's right half as cut (one manifold, keep-out removed)
 
     def mass_delta_kg(self, part_density_g_cm3: float) -> float:
         """Full-car (both halves) mass change vs 'foam body + whole part',
@@ -197,7 +198,7 @@ def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
         printed = part
     return Joint(name, open_side, plug, pocket, printed,
                  pocket_cm3=abs(pocket.volume) * 1e6, embedded_cm3=abs(O_full.volume) * 1e6,
-                 fill=fill, plug_full=plug_full)
+                 fill=fill, plug_full=plug_full, part=part)
 
 
 def machined_body(body_half, joints, x_ref_a_mm: float | None = None):
@@ -299,40 +300,75 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
         body_full = _drop_dust(_bool("difference", [body_full] + [j.plug_full for j in joints]),
                                1e-9)
     made = {"machined_body": (body_full, FOAM_G_CM3, 1)}
+    clean_body = _full(milled)
+
+    def printed_full(j):
+        """(part - body) U (plug n body), both halves. Computed as
+        (part U (plug n body)) - machined body: the whole part overlaps the
+        plug it sits in, so no two solids that merely TOUCH are ever unioned
+        (that, and fusing pocketed halves, is what tore these files)."""
+        if not j.fill:
+            return _full(j.printed)
+        inside = _bool("intersection", [j.plug_full, clean_body])
+        both = _bool("union", [_full(j.part), inside])
+        return _drop_dust(_bool("difference", [both, body_full]), 1e-9)
+
+    # every printed part's own solid ...
+    P = {}
     for name, mesh in parts.items():
-        if name in ("supports", "nose"):
-            continue
         if name in by:
-            solid = _full(by[name].printed)
-        else:                                        # surface-bonded: the part as drawn
+            P[name] = printed_full(by[name])
+        else:                     # surface-bonded: the part, trimmed at the body's surface
             pieces = mesh.split(only_watertight=False)
-            solid = _full(_bool("union", list(pieces)) if len(pieces) > 1 else mesh)
-        made[f"printed_{name}"] = (solid, DENSITY_G_CM3.get(name, 1.24),
-                                   2 if name == "tethers" else 1)
+            whole = _full(_bool("union", list(pieces)) if len(pieces) > 1 else mesh)
+            P[name] = _drop_dust(_bool("difference", [whole, clean_body]), 1e-9)
+    if cone is not None:                             # the hollow cone joins the nose piece
+        shell, drain = nose_shell(cone, assembly["nose"]["wall_mm"], x_ref_a_mm)
+        P["nose"] = _bool("union", [P["nose"], shell]) if "nose" in P else shell
+        if drain is not None:
+            P["nose"] = _bool("difference", [P["nose"], drain])
+
+    def front_rear(m):
+        mid = 0.5 * (m.bounds[0, 0] + m.bounds[1, 0])
+        out = []
+        for side in (-1, 1):
+            sel = [q for q in m.split(only_watertight=False) if side * (q.centroid[0] - mid) > 0]
+            out.append(trimesh.util.concatenate(sel) if sel else None)
+        return out
+
+    # ... then the parts AS PRINTED. Around the front axle four of them want
+    # the same space (the wing mount runs through the nose cone; the nose
+    # tenon, the tether guide and the support keel overlap: 0.85 cm3 counted
+    # twice, 2026-09-30). So: nose + front wing are one front assembly, each
+    # tether guide is printed on its support, and the support wins any overlap.
     no_file = set()
-    if "supports" in by and not by["supports"].fill:
+    pa12 = DENSITY_G_CM3["supports"]
+    if "supports" in P and not by["supports"].fill:
         # the team's own CAD supports keep their shape: their CAD is the file
-        made["supports_team_cad"] = (_full(by["supports"].printed), DENSITY_G_CM3["supports"], 2)
+        made["supports_team_cad"] = (P.pop("supports"), pa12, 2)
         no_file.add("supports_team_cad")
-    elif "supports" in by:                           # one full-width part per axle
-        full = _full(by["supports"].printed)
-        mid = 0.5 * (full.bounds[0, 0] + full.bounds[1, 0])
-        for tag, side in (("front", -1), ("rear", 1)):
-            sel = [m for m in full.split(only_watertight=False)
-                   if side * (m.centroid[0] - mid) > 0]
-            if sel:
-                made[f"printed_support_{tag}"] = (trimesh.util.concatenate(sel),
-                                                  DENSITY_G_CM3["supports"], 1)
-    if cone is not None or "nose" in by:
-        bits = [_full(by["nose"].printed)] if "nose" in by else []
-        drain = None
-        if cone is not None:
-            shell, drain = nose_shell(cone, assembly["nose"]["wall_mm"], x_ref_a_mm)
-            bits.append(shell)
-        nose = _bool("union", bits) if len(bits) > 1 else bits[0]
-        if drain is not None:                        # through the bulkhead and the slab on it
-            nose = _bool("difference", [nose, drain])
-        made["printed_nose"] = (nose, DENSITY_G_CM3["nose"], 1)
+    elif "supports" in P:
+        sup = front_rear(P.pop("supports"))
+        teth = front_rear(P.pop("tethers")) if "tethers" in P else (None, None)
+        for tag, a_, b_ in zip(("front", "rear"), sup, teth):
+            if a_ is not None:
+                made[f"printed_support_{tag}"] = (
+                    _drop_dust(_bool("union", [a_, b_]), 1e-9) if b_ is not None else a_, pa12, 1)
+    front = [P.pop(k) for k in ("nose", "fwing") if k in P]
+    if front:
+        solid = _bool("union", front) if len(front) > 1 else front[0]
+        if "printed_support_front" in made:
+            # end the tenon on a flat face 0.2 mm ahead of the support (its
+            # channel takes the rest): a plane cuts cleanly, the keel's own
+            # surface left a pinched edge
+            x_cut = made["printed_support_front"][0].bounds[0, 0] - 2e-4
+            if solid.bounds[1, 0] > x_cut:
+                solid = _bool("intersection", [solid, trimesh.creation.box(
+                    bounds=[[-1.0, -1.0, -1.0], [x_cut, 1.0, 1.0]])])
+        made["printed_front_assembly"] = (_drop_dust(solid, 1e-9), DENSITY_G_CM3["nose"], 1)
+    for name, m in P.items():
+        made[f"printed_{name}"] = (m, DENSITY_G_CM3.get(name, 1.24),
+                                   2 if name == "tethers" else 1)
     report["manufactured"] = {k: {"cm3": abs(m.volume) * 1e6, "g": abs(m.volume) * 1e6 * rho,
                                   "pieces_expected": n} for k, (m, rho, n) in made.items()}
     report["manufactured_g"] = float(sum(v["g"] for v in report["manufactured"].values()))
@@ -367,12 +403,17 @@ def nose_shell(cone_half, wall_mm: float, x_ref_a_mm: float):
     root = v[v[:, 0] > x_root - 1e-7]
     b0, z0, z1 = root[:, 1].max(), root[:, 2].min(), root[:, 2].max()
     h0, zc, w, L = (z1 - z0) / 2, (z1 + z0) / 2, wall_mm / 1e3, x_root - x_tip
+    xa = x_ref_a_mm / 1e3
+    ahead = trimesh.creation.box(bounds=[[-1.0, -0.2, -0.01], [xa, 0.2, 0.2]])
+    if w >= 0.5 * min(b0, h0):
+        # a wall this thick leaves no cavity worth printing: a SOLID cone.
+        # With no ballast that is mass with no aero cost (the alternative is
+        # a fatter body), and it needs no powder drain.
+        return _bool("intersection", [outer, ahead]), None
     inner = outer.copy()
     inner.apply_translation([-x_root, 0.0, -zc])
     inner.apply_scale([(L - w) / L, (b0 - w) / b0, (h0 - w) / h0])
     inner.apply_translation([x_root, 0.0, zc])
-    xa = x_ref_a_mm / 1e3
-    ahead = trimesh.creation.box(bounds=[[-1.0, -0.2, -0.01], [xa, 0.2, 0.2]])
     cavity = _bool("intersection", [inner, trimesh.creation.box(
         bounds=[[-1.0, -0.2, -0.01], [xa - w, 0.2, 0.2]])])
     drain = trimesh.creation.cylinder(radius=1.5e-3, height=0.02, sections=24)
