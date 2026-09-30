@@ -12,33 +12,18 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 
-def test_wheel_model_reproduces_the_cad_wheels():
-    import wheel as W
-    cad = json.loads((HERE / "cad_wheels.json").read_text())
-    for w, key in ((W.CAD_FRONT, "front_wheel"), (W.CAD_REAR, "rear_wheel")):
-        assert abs(w.inertia / cad[key]["I_gmm2"] - 1) < 0.03, (key, w.inertia)
-        assert abs(w.mass / cad[key]["mass_g"] - 1) < 0.05, (key, w.mass)
-
-
-def test_thick_ring_closed_form():
-    import wheel as W
-    w = W.Wheel(R=14.0, t_rim=0.5, w=13.0, n_spokes=0, l_hub=0.0)
-    m, i = w.parts()["rim"]
-    m_ref = 1.04e-3 * math.pi * (14.0**2 - 13.5**2) * 13.0
-    assert abs(m / m_ref - 1) < 1e-9 and abs(i / (m_ref * (14.0**2 + 13.5**2) / 2) - 1) < 1e-9
-
-
-def test_every_wheel_design_is_legal_and_at_least_as_stiff():
-    import component_contract as cc
-    import wheel as W
-    for name in W.DESIGNS:
-        s = W.summary(name)
-        assert cc.WHEEL_DIA_MIN <= 2 * s["front"]["R_mm"] <= cc.WHEEL_DIA_MAX
-        assert s["front"]["width_mm"] >= cc.FRONT_CONTACT_MIN
-        assert s["rear"]["width_mm"] >= cc.REAR_CONTACT_MIN
-        assert s["stiffness_vs_cad_min"] >= 0.999, name
-        assert s["printable"], name
-    assert W.mean_inertia_kg_m2("carbon_rim_capped") < W.mean_inertia_kg_m2("cad_v2")
+def test_team_wheels_have_the_bearing_seat_and_a_closed_cfd_disc():
+    import wheel as wh
+    f, r = wh.design()
+    assert 14.0 < f.R < 14.2 and 13.2 < f.w < 13.4 and 17.2 < r.w < 17.4          # T7.4/T7.5
+    assert 1.0 < f.mass < 1.4 and 1.1 < r.mass < 1.5                          # g, incl. bearing
+    for mesh, ax, bore_r, _hub in wh.team_wheel_meshes():
+        v = mesh.vertices - (mesh.bounds[0] + mesh.bounds[1]) / 2
+        r_min = np.hypot(*np.delete(v, ax, axis=1).T).min()
+        assert mesh.is_watertight and abs(r_min - wh.BEARING_OD_MM / 2) < 0.05, r_min
+    disc = wh.cfd_surface(f.R, f.w, 46.0, 23.25)
+    b = disc.bounds * 1e3
+    assert disc.is_watertight and abs(b[0, 2] + 0.3) < 1e-6 and abs(b[0, 1] - 23.25) < 1e-6
 
 
 def test_naca_section_thickness_and_chord():
@@ -108,19 +93,6 @@ def test_assembly_writes_patches_masses_and_passes_gates():
         assert back[0]["rotating"]["origin"] == tuple(rot["origin"])
 
 
-def test_wheel_shoulders_and_dome_are_closed_and_priced():
-    from dataclasses import replace
-    import wheel as wh
-    plain = wh.cfd_surface(14.05, 13.1, 46.0, 23.25)
-    shaped = wh.cfd_surface(14.05, 13.1, 46.0, 23.25, shoulder_in=1.5, shoulder_out=1.5, dome=2.0)
-    assert plain.is_watertight and shaped.is_watertight
-    assert abs(plain.volume * 1e9 - 3.14159265 * 14.05**2 * 13.1) < 30   # the old cylinder
-    assert abs((shaped.bounds[1, 1] - shaped.bounds[0, 1]) * 1e3 - 18.1) < 1e-6
-    f = wh.design("carbon_rim_capped")[0]
-    g = replace(f, shoulder_out=1.5)
-    assert g.total_width == f.total_width + 1.5 and g.inertia > f.inertia and g.w == f.w   # T7.4 unchanged
-
-
 def test_nose_cone_is_closed_legal_and_in_the_assembly():
     import tempfile
     import trimesh
@@ -138,24 +110,6 @@ def test_nose_cone_is_closed_legal_and_in_the_assembly():
         assert 1.0 < a["parts_mass_g"]["nose"] < 3.0
         m = trimesh.load(f"{td}/asm/nose.stl")
         assert m.bounds[0, 0] * 1e3 >= 30.0 - 20.0 - 1e-6
-
-
-def test_strut_support_is_legal_light_and_in_the_assembly():
-    import tempfile
-    import trimesh
-    import assembly
-    import support as sp
-    with tempfile.TemporaryDirectory() as td:
-        slim = trimesh.creation.box(extents=[0.18, 0.028, 0.019])   # inside the rear wheels
-        slim.apply_translation([0.115, 0.0, 0.013])
-        half = trimesh.intersections.slice_mesh_plane(slim, [0, 1, 0], [0, 0, 0], cap=True)
-        half.export(f"{td}/body.stl", file_type="stl_ascii")
-        a = assembly.build(120.3, 46.0, 43.72, f"{td}/body.stl", f"{td}/asm", support=sp.Strut())
-        g = {k: v for k, v in a["gates"].items() if "support" in k}
-        assert len(g) == 6 and min(g.values()) > 0, g
-        each = a["info"]["support_mass_g_each"]
-        assert all(0.2 < m < 1.0 for m in each), each          # CAD pods are 1.40-1.55 g
-        assert trimesh.load(f"{td}/asm/supports.stl").bounds[0, 1] >= 0
 
 
 def test_manufacturing_files_are_whole_closed_parts_in_mm():
@@ -199,15 +153,3 @@ def test_manufacturing_files_are_whole_closed_parts_in_mm():
             for b_ in keys[i + 1:]:
                 inter = joints._bool("intersection", [solids[a_], solids[b_]])
                 assert inter.is_empty or abs(inter.volume) < 1.0, (a_, b_, abs(inter.volume))
-
-
-if __name__ == "__main__":
-    _mod = sys.modules[__name__]
-    _fails = 0
-    for _n in sorted(n for n in dir(_mod) if n.startswith("test_")):
-        try:
-            getattr(_mod, _n)(); print("PASS", _n)
-        except Exception as e:  # noqa: BLE001
-            _fails += 1; print("FAIL", _n, "->", repr(e))
-    print(f"{_fails} failed")
-    sys.exit(1 if _fails else 0)

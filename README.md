@@ -6,9 +6,8 @@ with regulation gates, CFD patches, a mass rollup and the manufacturing files.
 | module | what |
 |---|---|
 | `component_contract.py` | every regulation number used (T3, T6, T7, T8, T9) |
-| `wheel.py` | the team's wheel STLs in SLS PA12 with a 6 mm seat for one 3x6x2.5 bearing (`team_stl`, the default): mass and inertia measured from the mesh. Also the closed spinning disc the CFD uses, and an older parametric wheel model with reference designs |
+| `wheel.py` | the team's wheel STLs in SLS PA12 with a 6 mm seat for one 3x6x2.5 bearing: mass and inertia measured from the mesh, and the closed spinning disc the CFD uses in their place |
 | `beam_support.py` | the team's support architecture, parametric: one PA12 beam per axle through the body, printed 3 mm stub axles, optional wheel-face discs; T7.12.1, T3.7 and cutter-radius gates |
-| `support.py` | an alternative NACA strut support (not the team's architecture) |
 | `wings.py` | NACA front wing with flap, rear wing and pylon, scrutineer-style gates |
 | `nose.py` | printed nose cone ahead of Ref A (a PA12 shell) |
 | `joints.py` | printed positives glued into milled negatives: a ball-end-safe pocket per part, the printed part that fills it, and the manufacturing files |
@@ -16,7 +15,7 @@ with regulation gates, CFD patches, a mass rollup and the manufacturing files.
 
 ```bash
 python assembly.py --body body_half.stl --out parts/
-python run_all_tests.py
+python -m pytest tests -q
 ```
 
 ## Manufacturing files (`joints.make_all`)

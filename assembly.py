@@ -27,11 +27,8 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import sys
 from pathlib import Path
-
-import numpy as np
 
 HERE = Path(__file__).resolve().parent
 for _p in ("part1-simulation", "part2-simulation"):
@@ -43,20 +40,13 @@ import component_contract as cc   # noqa: E402
 import wheel as wh                # noqa: E402
 import wings as wg                # noqa: E402
 import nose as ns                 # noqa: E402
-import support as sp              # noqa: E402
 import beam_support as bsm        # noqa: E402
 
 SPEED_MPS = 20.0
 SINK_MM = 0.3
 PART_MATERIAL = "PLA"           # wings, mounts, tether guides: printed, solid
-# Axles: 3 mm (the 3x6x2.5 bearings' bore), one per axle, wheel face to wheel
-# face through the supports. Steel by default; 7.7 g for the pair is a large
-# share of a ballast-free 48 g car, so it is a parameter, not a constant.
-AXLE_D_MM = 3.0
-AXLE_DENSITY_G_CM3 = {"steel": 7.85, "titanium": 4.43, "carbon": 1.55, "none": 0.0}
-# Team spec 2026-09-27: the axles are stubs printed as part of the support (the
-# v2 CAD already has them), bearings pressed on -- no separate axle.
-AXLE_MATERIAL = "none"
+# No separate axles (team spec 2026-09-27): 3 mm stubs printed as part of each
+# support, bearings pressed on. Their mass is in the support's.
 
 
 def _export_half(mesh, path: Path) -> None:
@@ -92,12 +82,6 @@ def _full_mass_com(half_meshes, density_g_cm3: float):
     return 2 * vol * density_g_cm3 * 1e3, (cx, 0.0, cz)
 
 
-def axle_mass_kg(y_inner_mm: float, wheel_width_mm: float) -> float:
-    length = 2 * (y_inner_mm + wheel_width_mm)
-    return (math.pi * (AXLE_D_MM / 2) ** 2 * length * 1e-3
-            * AXLE_DENSITY_G_CM3[AXLE_MATERIAL] * 1e-3)
-
-
 def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
                           wheel_design, support_kg=(1.396e-3, 1.545e-3)) -> dict:
     """Kwargs for Part 2's FixedHardwareSpec from the REAL parts.
@@ -117,10 +101,8 @@ def fixed_hardware_kwargs(W_mm, x_front_mm, d_halo_mm, parts_mass: dict,
     hz = [z for _y, z in halo.cross_section_yz_m]
     f, r = wh.design(wheel_design)
     sup_f, sup_r = support_kg                       # each; default = v2 CAD (fixed_hardware)
-    from geometry_contract import FRONT_WHEEL_INNER_Y_MM as FY, REAR_WHEEL_INNER_Y_MM as RY
-    a_f, a_r = axle_mass_kg(FY, f.total_width), axle_mass_kg(RY, r.total_width)
-    mf = 2 * (f.mass * 1e-3 + sup_f) + a_f
-    mr = 2 * (r.mass * 1e-3 + sup_r) + a_r
+    mf = 2 * (f.mass * 1e-3 + sup_f)
+    mr = 2 * (r.mass * 1e-3 + sup_r)
     xf, xr = x_front_mm / 1e3, (x_front_mm + W_mm) / 1e3
     aero = [v for k, v in parts_mass.items() if k in ("fwing", "rwing", "tethers", "nose")]
     m_aero = sum(m for m, _c in aero)
@@ -143,7 +125,8 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
           out_dir: str, wheel_design="team_stl",
           front: wg.FrontWing = wg.FrontWing(), rear: wg.RearWing = wg.RearWing(),
           rotate_wheels: bool = True, nose: "ns.NoseCone | None" = None,
-          support: "sp.Strut | None" = None) -> dict:
+          support: "bsm.BeamSupport | None" = None) -> dict:
+    """support: None = the team's v2 CAD supports (reference), or a BeamSupport."""
     import trimesh
     import hardware_geometry as hg
     out = Path(out_dir)
@@ -158,9 +141,7 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
 
     # -- wheels (rotating closed cylinders) --------------------------------
     for name, x, y_in, w in (("wheelF", x_front_mm, FY, f.w), ("wheelR", x_rear, RY, r.w)):
-        wd = f if name == "wheelF" else r
-        cyl = wh.cfd_surface(R, w, x, y_in, SINK_MM, shoulder_in=wd.shoulder_in,
-                             shoulder_out=wd.shoulder_out, dome=wd.dome)
+        cyl = wh.cfd_surface(R, w, x, y_in, SINK_MM)
         _export_half(cyl, out / f"{name}.stl")
         origin = (x / 1e3, (y_in + w / 2) / 1e3, (R - SINK_MM) / 1e3)
         surfaces.append({"name": name, "stl": str(out / f"{name}.stl"),
@@ -173,7 +154,7 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
     gates["T7.2_front_gap"] = 2 * FY - cc.FRONT_GAP_MIN
     gates["T7.2_rear_gap"] = 2 * RY - cc.REAR_GAP_MIN
 
-    # -- supports: v2 CAD, or the parametric strut ------------------------
+    # -- supports: v2 CAD, or the parametric beam -------------------------
     support_kg = (1.396e-3, 1.545e-3)
     if support is None:
         sup = [hg.build_wheel_assembly(a, x)[f"{a}_wheel_support_right"]
@@ -181,7 +162,7 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
         # Safety net: the rear CAD bottomed at 1.40 mm before it was fixed.
         sup = [trimesh.intersections.slice_mesh_plane(
             m, [0, 0, 1.0], [0, 0, (cc.TRACK_CLEARANCE_MIN + 0.01) / 1e3], cap=True) for m in sup]
-    elif isinstance(support, bsm.BeamSupport):
+    else:
         # The team's architecture, parametric: one PA12 beam per axle through
         # the body, stub axles, optional wheel-face discs.
         sup, support_kg = [], []
@@ -191,15 +172,6 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
             gates.update(bsm.gates(support, bm, x, R - SINK_MM, R, tag))
             sup.append(bm["support"])
             support_kg.append(bsm.mass_kg(support, bm) / 2)      # per side
-        support_kg = tuple(support_kg)
-    else:
-        sup, support_kg = [], []
-        for tag, x, y_in, w in (("front", x_front_mm, FY, f.total_width),
-                                ("rear", x_rear, RY, r.total_width)):
-            sm = sp.build_strut(support, x, R - SINK_MM, y_in, w, body)
-            gates.update(sp.strut_gates(support, sm, x, R - SINK_MM, R, tag))
-            sup.append(sm["strut"])
-            support_kg.append(sp.strut_mass_kg(support, sm))
         support_kg = tuple(support_kg)
     _export_half(trimesh.util.concatenate(sup), out / "supports.stl")
     surfaces.append({"name": "supports", "stl": str(out / "supports.stl"), "rotating": None})
