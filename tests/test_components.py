@@ -158,6 +158,38 @@ def test_strut_support_is_legal_light_and_in_the_assembly():
         assert trimesh.load(f"{td}/asm/supports.stl").bounds[0, 1] >= 0
 
 
+def test_manufacturing_files_are_whole_closed_parts_in_mm():
+    """What is sent to the mill and the printer: one closed solid per part,
+    both halves, in mm, the two supports as two parts, the nose with its cone.
+    (2026-09-30: both support files held half of the FRONT support, the nose
+    file had no cone, and 5 of 7 files were not closed once re-read.)"""
+    import trimesh
+    import assembly
+    import beam_support as bsm
+    import joints
+    import nose as ns
+    with tempfile.TemporaryDirectory() as td:
+        slim = trimesh.creation.box(extents=[0.192, 0.034, 0.024])
+        slim.apply_translation([0.030 + 0.096, 0.0, 0.004 + 0.012])     # Ref A at x = 30 mm
+        body = trimesh.intersections.slice_mesh_plane(slim, [0, 1, 0], [0, 0, 0], cap=True)
+        body.export(f"{td}/body.stl", file_type="stl_ascii")
+        a = assembly.build(120.3, 46.0, 43.72, f"{td}/body.stl", f"{td}/asm",
+                           support=bsm.BeamSupport(),
+                           nose=ns.NoseCone(blend_after_ref_a_mm=1.0, root_scale=1.0,
+                                            material="PA12", wall_mm=0.8))
+        rep = joints.make_all(body, a, 30.0, 222.0, f"{td}/mfg/manufacture")
+        made = rep["manufactured"]
+        for k, v in made.items():
+            assert v["closed"] and v["pieces"] == v["pieces_expected"], (k, v)
+            assert abs(v["file_cm3"] - v["cm3"]) < 0.01 * v["cm3"] + 1e-3, (k, v)
+        load = lambda k: trimesh.load(made[k]["file"], force="mesh").bounds   # noqa: E731
+        assert load("machined_body")[1, 0] - load("machined_body")[0, 0] > 150     # mm, not m
+        f, r = load("printed_support_front"), load("printed_support_rear")
+        assert f[1, 0] < 100 < r[0, 0] and f[0, 1] < -20 and f[1, 1] > 20, (f, r)
+        assert load("printed_nose")[0, 0] < 30.0 - 15.0                 # reaches the cone tip
+        assert abs(rep["manufactured_g"] - sum(v["g"] for v in made.values())) < 1e-9
+
+
 if __name__ == "__main__":
     _mod = sys.modules[__name__]
     _fails = 0

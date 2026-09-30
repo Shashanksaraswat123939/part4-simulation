@@ -1,32 +1,45 @@
 # Part 4 — Components
 
 Everything on the car that is not the milled body, as exact parametric geometry
-with regulation gates, CFD patches and a mass rollup.
+with regulation gates, CFD patches, a mass rollup and the manufacturing files.
 
 | module | what |
 |---|---|
 | `component_contract.py` | every regulation number used (T3, T6, T7, T8, T9) |
-| `wheel.py` | parametric wheel: mass and inertia (within 1.1 % of the v2 CAD), stiffness relative to the CAD wheel, designs, CFD wheel surface |
-| `wings.py` | NACA front and rear wings, mount and pylon, scrutineer-style gates |
-| `nose.py` | parametric printed nose cone (off by default: -0.4 % on the current wings) |
-| `support.py` | parametric NACA strut wheel support inside the T7.12.1 cylinder, ~0.5 g vs 1.4-1.5 g CAD pods |
-| `assembly.py` | all parts for one car: right-half STL per patch, `extra_surfaces` for Part 2, `fixed_hardware_kwargs` for Part 2's mass rollup, gates |
+| `wheel.py` | the team's wheel STLs in SLS PA12 with a 6 mm seat for one 3x6x2.5 bearing (`team_stl`, the default): mass and inertia measured from the mesh. Also the closed spinning disc the CFD uses, and an older parametric wheel model with reference designs |
+| `beam_support.py` | the team's support architecture, parametric: one PA12 beam per axle through the body, printed 3 mm stub axles, optional wheel-face discs; T7.12.1, T3.7 and cutter-radius gates |
+| `support.py` | an alternative NACA strut support (not the team's architecture) |
+| `wings.py` | NACA front wing with flap, rear wing and pylon, scrutineer-style gates |
+| `nose.py` | printed nose cone ahead of Ref A (a PA12 shell) |
+| `joints.py` | printed positives glued into milled negatives: a ball-end-safe pocket per part, the printed part that fills it, and the manufacturing files |
+| `assembly.py` | all parts for one car: right-half STL per CFD patch, `extra_surfaces` for Part 2, `fixed_hardware_kwargs` for the mass rollup, gates |
 
 ```bash
 python assembly.py --body body_half.stl --out parts/
 python run_all_tests.py
 ```
 
-Evidence behind the defaults (GitHub Actions CFD, 2026-09-25): wheels are 64–75 % of
-the car's drag; a flat front wing 5.5 mm ahead of the front wheels is drag-neutral
-(it shields the wheels by exactly its own drag); the endplates tried added 3–6 %.
+## Manufacturing files (`joints.make_all`)
 
-Wheel designs (mean inertia per wheel): `carbon_rim_film` 101.5 g·mm² (default:
-open carbon wheel closed by 0.10 mm film faces, so the rotating-wall CFD is honest),
-`carbon_rim_capped` 124.9, `carbon_rim` 85.6, `abs_light` 117.0,
-`cad_v2` 137.7. Aero shape per wheel: `shoulder_in`/`shoulder_out` (rounded tyre
-shoulders beyond the T7.4 contact width) and `dome` (outboard hubcap), priced as
-printed shells; `assembly.build` also takes a `(front, rear)` pair of `Wheel`.
+Written to `manufacture/`, in **millimetres**, both halves, one closed solid per part:
 
-The v2 rear wheel-support CAD bottoms out at 1.40 mm, 0.10 mm under T3.7;
-`assembly.build` trims it at 1.51 mm. Change the CAD to match.
+| file | what | material |
+|---|---|---|
+| `machined_body.stl` | the body as milled: every pocket cut, ending at Ref A | foam, 0.163 g/cm3 |
+| `printed_support_front.stl`, `printed_support_rear.stl` | one part per axle: beam, stub axles, disc, and the keel that fills the drop-in channel | PA12 |
+| `printed_nose.stl` | hollow cone shell, bulkhead with a 3 mm powder drain, tenon | PA12 |
+| `printed_fwing.stl`, `printed_rwing.stl`, `printed_tethers.stl` | wings with their mounts and plugs; two tether guides | PLA |
+| `printed_wheel_front_x2.stl`, `printed_wheel_rear_x2.stl` | the team wheels with the bearing seat (print two of each) | PA12 |
+
+`make_all` re-reads every file it writes and reports whether it is a closed solid
+with the expected number of pieces, and its mass. `manufactured_g` is the sum: with
+the wheels, bearings and halo it is the car's mass on the scale, which is what
+Part 5 sizes the body against and checks T3.6 with.
+
+## Evidence behind the defaults
+
+GitHub Actions CFD, medium mesh, all parts in the flow: wheels are about 64 % of the
+car's drag. Front wing at +6 deg with an 8 mm flap at 30 deg; minimum-section rear
+wing. The v2 rear wheel-support CAD bottoms out at 1.40 mm, 0.10 mm under T3.7, and
+its 12.7 mm disc blocks the T7.13 hang-test claw; the parametric beam support uses a
+12.0 mm disc.

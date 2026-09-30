@@ -42,6 +42,7 @@ class Joint:
     pocket_cm3: float
     embedded_cm3: float
     fill: bool = True             # the printed part fills its pocket (a plug)
+    plug_full: object = None      # the plug across BOTH halves, for the full machined body
 
     def mass_delta_kg(self, part_density_g_cm3: float) -> float:
         """Full-car (both halves) mass change vs 'foam body + whole part',
@@ -102,10 +103,18 @@ def _footprint(mesh, axes=(0, 1)):
     return filled[0] if len(filled) == 1 else MultiPolygon(filled)
 
 
-def _prism(poly, z0_mm, z1_mm):
+def _prism(poly, z0_mm, z1_mm, half: bool = True):
+    """Extrude a footprint between two heights. half=False keeps both sides of
+    the centreline: one solid with no seam on the symmetry plane."""
     import trimesh
+    from shapely.affinity import scale
     from shapely.geometry import box
-    poly = poly.intersection(box(-1e3, 0.0, 1e3, 1e3))       # right half only
+    # Close the outline with its own mirror image first: an edge that runs a
+    # few um off the centreline (buffer round-off) would leave a paper-thin
+    # foam wedge between the pocket and the symmetry plane.
+    poly = poly.union(scale(poly, yfact=-1.0, origin=(0, 0))).buffer(0.05).buffer(-0.05)
+    if half:
+        poly = poly.intersection(box(-1e3, 0.0, 1e3, 1e3))   # right half only
     parts = [poly] if poly.geom_type == "Polygon" else list(getattr(poly, "geoms", []))
     out = []
     for p in parts:
@@ -171,11 +180,15 @@ def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
         fp = _machinable_outline(_footprint(O), tool_r_mm)
         zb, zt = body_half.bounds[:, 2] * 1e3
         oz0, oz1 = O.bounds[:, 2] * 1e3
-        plug = _prism(fp, zb - 1.0, oz1) if open_side == "bottom" else _prism(fp, oz0, zt + 1.0)
+        z0, z1 = (zb - 1.0, oz1) if open_side == "bottom" else (oz0, zt + 1.0)
+        plug, plug_full = _prism(fp, z0, z1), _prism(fp, z0, z1, half=False)
     if plug is None:
         return None
+    if open_side == "side":
+        plug_full = _full(plug)
     if keep_out is not None:
         plug = _bool("difference", [plug, keep_out])
+        plug_full = _bool("difference", [plug_full, keep_out])
     pocket = _bool("intersection", [plug, body_half])
     if fill:
         outside = _bool("difference", [part, body_half])
@@ -184,7 +197,7 @@ def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
         printed = part
     return Joint(name, open_side, plug, pocket, printed,
                  pocket_cm3=abs(pocket.volume) * 1e6, embedded_cm3=abs(O_full.volume) * 1e6,
-                 fill=fill)
+                 fill=fill, plug_full=plug_full)
 
 
 def machined_body(body_half, joints, x_ref_a_mm: float | None = None):
@@ -243,9 +256,12 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
     ko = t55_keep_out(rear_face_mm - 50.0 - 4.0, rear_face_mm + 1.0)
     parts = {s["name"]: trimesh.load(s["stl"], force="mesh") for s in assembly["extra_surfaces"]
              if not s["name"].startswith("wheel") and s["name"] != "halo"}
+    cone = parts.get("nose")                  # the CFD cone (Part 4 nose.py), if any
     np_ = nose_part(body_half, x_ref_a_mm)
     if np_ is not None:
         parts["nose"] = np_
+    elif cone is not None:
+        del parts["nose"]                     # no body ahead of Ref A: nothing to joint
     joints, report = [], {"parts": {}, "mass_delta_kg": {}}
     cad_supports = assembly.get("support") is None
     for name, mesh in parts.items():
@@ -272,34 +288,141 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
     report["machined_body_cm3_full"] = 2 * abs(mb.volume) * 1e6
     report["machined_body_watertight"] = bool(mb.is_watertight)
     report["dropped_fragments_mm3"] = mb.metadata.get("dropped_fragments_mm3", 0.0)
+
+    # ---- what is actually made: one solid per file, both halves, in mm ----
+    by = {j.name: j for j in joints}
+    # The full body: the clean (un-pocketed) halves fused, THEN full-width
+    # pockets cut. Fusing two pocketed halves left torn seams wherever a
+    # pocket met the centreline (2026-09-30).
+    body_full = _full(milled)
+    if joints:
+        body_full = _drop_dust(_bool("difference", [body_full] + [j.plug_full for j in joints]),
+                               1e-9)
+    made = {"machined_body": (body_full, FOAM_G_CM3, 1)}
+    for name, mesh in parts.items():
+        if name in ("supports", "nose"):
+            continue
+        if name in by:
+            solid = _full(by[name].printed)
+        else:                                        # surface-bonded: the part as drawn
+            pieces = mesh.split(only_watertight=False)
+            solid = _full(_bool("union", list(pieces)) if len(pieces) > 1 else mesh)
+        made[f"printed_{name}"] = (solid, DENSITY_G_CM3.get(name, 1.24),
+                                   2 if name == "tethers" else 1)
+    if "supports" in by:                             # one full-width part per axle
+        full = _full(by["supports"].printed)
+        mid = 0.5 * (full.bounds[0, 0] + full.bounds[1, 0])
+        for tag, side in (("front", -1), ("rear", 1)):
+            sel = [m for m in full.split(only_watertight=False)
+                   if side * (m.centroid[0] - mid) > 0]
+            if sel:
+                made[f"printed_support_{tag}"] = (trimesh.util.concatenate(sel),
+                                                  DENSITY_G_CM3["supports"], 1)
+    if cone is not None or "nose" in by:
+        bits = [_full(by["nose"].printed)] if "nose" in by else []
+        drain = None
+        if cone is not None:
+            shell, drain = nose_shell(cone, assembly["nose"]["wall_mm"], x_ref_a_mm)
+            bits.append(shell)
+        nose = _bool("union", bits) if len(bits) > 1 else bits[0]
+        if drain is not None:                        # through the bulkhead and the slab on it
+            nose = _bool("difference", [nose, drain])
+        made["printed_nose"] = (nose, DENSITY_G_CM3["nose"], 1)
+    report["manufactured"] = {k: {"cm3": abs(m.volume) * 1e6, "g": abs(m.volume) * 1e6 * rho,
+                                  "pieces_expected": n} for k, (m, rho, n) in made.items()}
+    report["manufactured_g"] = float(sum(v["g"] for v in report["manufactured"].values()))
     if out_dir is not None:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        _full(mb).export(str(out / "machined_body.stl"))
-        report["machined_body_half_stl"] = str(out / "machined_body_half.stl")
+        # metres, right half: the analysis copy legality probes for T5.5
+        report["machined_body_half_stl"] = str(out.parent / "machined_body_half.stl")
         mb.export(report["machined_body_half_stl"])
-        for j in joints:
-            if j.name == "supports":                 # one full-width part per axle
-                full = _full(j.printed)
-                pieces = sorted(full.split(only_watertight=False), key=lambda m: m.bounds[0, 0])
-                for tag, piece in zip(("front", "rear"), pieces):
-                    piece.export(str(out / f"printed_support_{tag}.stl"))
-            else:                                    # centreline parts: one piece
-                _full(j.printed).export(str(out / f"printed_{j.name}.stl"))
+        for k, (m, _rho, _n) in made.items():
+            report["manufactured"][k].update(_export_mm(m, out / f"{k}.stl"))
         if assembly.get("wheel_design", {}).get("design") == "team_stl":
-            # the team's wheels with the 6 mm bearing seat, in the STL's own frame
+            # the team's wheels with the 6 mm bearing seat, in the STL's own frame (mm)
             import wheel as wh
             for tag, (mesh, *_rest) in zip(("front", "rear"), wh.team_wheel_meshes()):
                 mesh.export(str(out / f"printed_wheel_{tag}_x2.stl"))
     return report
 
 
-def _full(half):
-    m = half.copy()
-    m.vertices[:, 1] *= -1
-    m.invert()
-    try:
-        return _bool("union", [half, m])
-    except Exception:  # noqa: BLE001 -- fall back to two touching halves
-        import trimesh
-        return trimesh.util.concatenate([half, m])
+def nose_shell(cone_half, wall_mm: float, x_ref_a_mm: float):
+    """The printed cone as it is printed: a hollow shell of `wall_mm`, both
+    halves, ending at Ref A in a `wall_mm` bulkhead that glues to the body's
+    front face and carries the tenon. A 3 mm hole through the bulkhead lets the
+    SLS powder out of the cavity (a sealed shell keeps it: ~0.5 g/cm3). The
+    CFD cone is a closed solid; printing THAT would weigh three times the
+    shell the mass rollup assumes."""
+    import trimesh
+    outer = _full(cone_half)
+    v = cone_half.vertices
+    x_tip, x_root = v[:, 0].min(), v[:, 0].max()
+    root = v[v[:, 0] > x_root - 1e-7]
+    b0, z0, z1 = root[:, 1].max(), root[:, 2].min(), root[:, 2].max()
+    h0, zc, w, L = (z1 - z0) / 2, (z1 + z0) / 2, wall_mm / 1e3, x_root - x_tip
+    inner = outer.copy()
+    inner.apply_translation([-x_root, 0.0, -zc])
+    inner.apply_scale([(L - w) / L, (b0 - w) / b0, (h0 - w) / h0])
+    inner.apply_translation([x_root, 0.0, zc])
+    xa = x_ref_a_mm / 1e3
+    ahead = trimesh.creation.box(bounds=[[-1.0, -0.2, -0.01], [xa, 0.2, 0.2]])
+    cavity = _bool("intersection", [inner, trimesh.creation.box(
+        bounds=[[-1.0, -0.2, -0.01], [xa - w, 0.2, 0.2]])])
+    drain = trimesh.creation.cylinder(radius=1.5e-3, height=0.02, sections=24)
+    drain.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]))
+    drain.apply_translation([xa, 0.0, zc + 0.5 * h0])      # above the tenon, on the centreline
+    return _bool("difference", [_bool("intersection", [outer, ahead]), cavity]), drain
+
+
+def _export_mm(mesh, path) -> dict:
+    """Write one manufacturing STL in MILLIMETRES (what CAM and slicers assume)
+    and report what the file holds once re-read. Booleans leave vertices closer
+    together than an STL's 32-bit floats can tell apart, which tears the
+    surface on save; simplifying to 1 um in 32-bit first keeps it closed."""
+    import manifold3d as m3
+    import trimesh
+    m = mesh.copy()
+    m.apply_scale(1e3)
+    man = m3.Manifold(m3.Mesh(vert_properties=np.asarray(m.vertices, np.float32),
+                              tri_verts=np.asarray(m.faces, np.uint32))).simplify(1e-3)
+    o = man.to_mesh()
+    tm = trimesh.Trimesh(np.asarray(o.vert_properties)[:, :3], np.asarray(o.tri_verts),
+                         process=False)
+    tm.merge_vertices()
+    # a collapsed sliver is two triangles on the same three vertices, back to
+    # back: zero volume, and four faces on each of its edges. Remove both.
+    key = np.sort(tm.faces, axis=1)
+    _u, inv, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    tm.update_faces((cnt[inv.ravel()] == 1) & tm.nondegenerate_faces())
+    tm.remove_unreferenced_vertices()
+    _drop_dust(tm, 1.0).export(str(path))
+    back = trimesh.load(str(path), force="mesh")
+    return {"file": str(path), "closed": bool(back.is_watertight),
+            "pieces": len(back.split(only_watertight=False)),
+            "file_cm3": abs(back.volume) / 1e3}
+
+
+def _full(half, overlap_m: float = 1e-5):
+    """Both halves as ONE solid. The halves only touch on the symmetry plane,
+    and a boolean of two touching solids leaves them separate with coincident
+    caps: once an STL merges the vertices every cap edge has four faces and
+    the file is not a solid (measured 105 such edges on the front wing,
+    2026-09-30). So each half is pushed 10 um through the plane first."""
+    a = half.copy()
+    a.vertices[np.abs(a.vertices[:, 1]) < 1e-9, 1] = -overlap_m
+    b = a.copy()
+    b.vertices[:, 1] *= -1
+    b.invert()
+    return _drop_dust(_bool("union", [a, b]), 1e-9)
+
+
+def _drop_dust(mesh, min_volume: float):
+    """Remove closed shells smaller than `min_volume` (mesh units cubed).
+    Pockets that meet the centreline leave foam slivers under 0.1 mm thick;
+    each touches the body along an edge, which an STL cannot represent, and
+    collapses to a zero-volume flap when written. 1 mm3 is dust, not a part."""
+    import trimesh
+    pieces = mesh.split(only_watertight=False)
+    keep = [m for m in pieces if abs(m.volume) >= min_volume]
+    return mesh if len(keep) == len(pieces) or not keep else trimesh.util.concatenate(keep)
