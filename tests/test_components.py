@@ -191,12 +191,15 @@ def test_support_follows_the_team_format_and_carries_the_loads():
                       R_mm=R, channel=ch)
     assert alone["_struct"]["plate_h_mm"] > 1.5 * out["_struct"]["plate_h_mm"]
     assert bsm.SAG_MAX_MM - alone["_struct"]["sag_mm"] >= -1e-9
-    # a harder radial load asks for a thicker boss at the disc
+    # harder loads ask for a thicker boss and a thicker disc
     y_disc = y_in + bs.disc_recess_mm
-    d0 = bsm.sized_root_d_mm(bs, y_disc, y_bear, R)
+    bare = dataclasses.replace(bs, boss_d_mm=0.0)
+    d0, t0 = bsm.sized_root_d_mm(bare, y_disc, y_bear, R), bsm.sized_disc_t_mm(bs, y_disc, y_bear, R)
+    assert t0 >= bsm.PRINT_MIN_MM
     old = bsm.LOAD_RADIAL_N
     try:
-        bsm.LOAD_RADIAL_N = 10 * old
-        assert bsm.sized_root_d_mm(bs, y_disc, y_bear, R) > d0
+        bsm.LOAD_RADIAL_N = 30 * old
+        assert bsm.sized_root_d_mm(bare, y_disc, y_bear, R) > d0
+        assert bsm.sized_disc_t_mm(bs, y_disc, y_bear, R) > t0
     finally:
         bsm.LOAD_RADIAL_N = old

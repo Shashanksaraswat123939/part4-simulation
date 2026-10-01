@@ -211,8 +211,9 @@ def pod_joint(part, body_half, channels: dict, keep_out=None) -> Joint | None:
     """The supports as pods (beam_support.py): at each axle the channel is
     milled from below across the whole width, and the printed support is the
     body's own shape there, hollowed to the wall thickness, with the plate,
-    strip, disc and stub joined on. A 4 mm hole in the roof (under the foam,
-    so sealed once glued) lets the unsintered powder out."""
+    strip, disc and stub joined on. Its two end walls, which only face the
+    foam, are opened to a rim (the glue land): lighter, and the unsintered
+    powder falls out."""
     import manifold3d as m3
     import trimesh
     import beam_support as bsm
@@ -242,7 +243,7 @@ def pod_joint(part, body_half, channels: dict, keep_out=None) -> Joint | None:
     if pocket is None or pocket.is_empty or abs(pocket.volume) < 1e-12:
         return None
     body_full = man(_full(body_half))
-    shells, drains = [], []
+    shells = []
     for ch in channels.values():
         one = _prism_y(bsm.channel_outline(ch), -y_max, y_max)
         if keep_out is not None:
@@ -252,15 +253,16 @@ def pod_joint(part, body_half, channels: dict, keep_out=None) -> Joint | None:
         if cavity.is_empty():
             shells.append(lump)
             continue
-        shells.append(lump - cavity)
-        bb = cavity.bounding_box()
-        drain = trimesh.creation.cylinder(radius=2e-3, height=bb[5] - bb[2] + 4e-3, sections=24)
-        drain.apply_translation([(bb[0] + bb[3]) / 2, 0.0, (bb[2] + bb[5]) / 2 + 2e-3])
-        drains.append(man(drain))
-    # the drains last: through the roof AND the plate lying in it
+        shell = lump - cavity
+        # the window through both end walls: the cavity drawn in by the rim,
+        # stretched along the car
+        inner = cavity.minkowski_difference(m3.Manifold.sphere(ch.get("rim_mm", 3.0) * 1e-3, 12))
+        if not inner.is_empty():
+            bb = cavity.bounding_box()
+            cx = (bb[0] + bb[3]) / 2
+            shell = shell - inner.translate((-cx, 0, 0)).scale((4.0, 1.0, 1.0)).translate((cx, 0, 0))
+        shells.append(shell)
     whole = m3.Manifold.batch_boolean(shells + [man(_full(part))], m3.OpType.Add)
-    if drains:
-        whole = whole - m3.Manifold.batch_boolean(drains, m3.OpType.Add)
     # crumbs (under 1 mm3) the hollowing leaves where the wall is thinner than itself
     whole = m3.Manifold.batch_boolean([c for c in whole.decompose() if c.volume() > 1e-9 * 1e-3],
                                       m3.OpType.Add)

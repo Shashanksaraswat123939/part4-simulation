@@ -34,16 +34,19 @@ AXLE BUILT IN and the bearing pressed onto it.
            outer face: it closes the wheel's outer side and holds the wheel
            on. It does not turn (it is on the axle, not the wheel).
 
-LOADS ("normal racing loads", assumptions to adjust with the team):
-  radial 8 N at the bearing (the whole car at ~33 g on one axle; launch
-  load transfer is about 1 N a wheel and the finish catch under 1 N, so this
-  is being set down hard or pressed on), and 3 N sideways at the tyre's
-  contact (~12 g of the car on the two wheels of one side). SLS PA12 at
-  44 MPa with a safety factor of 2, and at most 0.15 mm of sag at the bearing
-  so the wheel stays clear of the disc. The 3 mm journal is fixed by the
-  bearing and is the weak point: at safety 2 it carries 3.2 N sideways, no
-  more (a steel pin there would lift that). Everything thicker is sized to
-  these loads.
+LOADS ("normal racing loads"): 3 N radial at the bearing and 1.2 N sideways
+  at the tyre's contact, SLS PA12 at 44 MPa with a safety factor of 2, and at
+  most 0.15 mm of sag at the bearing. These are CALIBRATED TO THE TEAM'S OWN
+  SUPPORT: their 1 mm disc, which races, carries just this at safety 2 (the
+  stub's moment bends the disc between the boss and the two members). Launch
+  load transfer and the finish catch are each about 1 N a wheel. (8 N and
+  3 N, tried first, would have failed the team's proven disc.)
+
+LIGHTEST THAT PASSES: every thickness here (plate, strip, disc, pod wall,
+  hubcap) is the printer's minimum wall unless a load check asks for more,
+  and then it is exactly what the check asks. The plate stops just inside
+  the pod, whose roof carries its load on. What the air decides (the plate's
+  chord, the discs, the pod's length) is left to the search.
 
 Material SLS PA12 (1.01 g/cm3, team spec 2026-09-27). One piece left-to-right;
 the builder returns the right half (y >= 0), like every other Part 4 part.
@@ -69,8 +72,9 @@ BEARING_W_MM = 2.5
 RIM_INNER_R_MM = 13.72        # the team wheel's rim, inside (measured on the STL)
 
 # Loads and limits (see the module docstring)
-LOAD_RADIAL_N = 8.0
-LOAD_AXIAL_N = 3.0
+LOAD_RADIAL_N = 3.0
+LOAD_AXIAL_N = 1.2
+PRINT_MIN_MM = 0.7            # thinnest wall SLS PA12 prints reliably
 PA12_STRENGTH_MPA = 44.0
 PA12_E_MPA = 1650.0
 SAFETY = 2.0
@@ -81,34 +85,36 @@ SAG_MAX_MM = 0.15
 class BeamSupport:
     # The plate (the team's is 20 x 1.7 mm). Its thickness is raised to what
     # the loads need. Without a pod it is a beam in a slot of its own.
-    beam_w_mm: float = 20.0       # x: the chord
-    beam_h_mm: float = 1.7        # z: the thickness, at least
+    beam_w_mm: float = 12.0       # x: the chord
+    beam_h_mm: float = PRINT_MIN_MM   # z: the thickness, at least
     p: float = 2.0                # 2 = ellipse (smoothest), larger = boxier
     x_offset_mm: float = 0.0      # beam centre relative to the axle
     z_offset_mm: float = 0.0
     disc_front: bool = True       # the team's CAD has a disc at every wheel
     disc_rear: bool = True
     disc_r_mm: float = 12.0       # <= axle height - 1.5 mm (T3.7): 12.25 here
-    disc_t_mm: float = 1.0
+    disc_t_mm: float = PRINT_MIN_MM   # at least; raised to carry the stub's moment
     disc_recess_mm: float = 1.0   # disc's outer face this far inside the rim
     #                               (negative: standing inboard of the wheel)
     boss_d_mm: float = 5.8        # the flare's diameter at the disc, at least
     fillet_r_mm: float = 3.0      # the flare's radius
     shoulder_d_mm: float = 4.0    # what the bearing's inner race sits against
     pod: bool = True              # False: a bare beam in its own slot (before 2026-10-01)
-    pod_len_mm: float = 18.0      # along the car, at most
+    pod_len_mm: float = 14.0      # along the car, at most (the plate's chord and a margin)
     pod_arch_mm: float = 19.0     # the channel's roof, at most
-    pod_wall_mm: float = 0.8
+    pod_wall_mm: float = PRINT_MIN_MM
+    pod_rim_mm: float = 3.0       # the glue land left around each open end of the pod
+    plate_lap_mm: float = 5.0     # how far the plate runs into the pod's roof
     strip: bool = True
-    strip_w_mm: float = 9.0
-    strip_h_mm: float = 1.0
+    strip_w_mm: float = 7.0
+    strip_h_mm: float = PRINT_MIN_MM
     strip_above_floor_mm: float = 2.5   # its mid-height above the body's floor at the axle:
     #                                     high enough to leave through the body's side, as
     #                                     the plate does (at the floor itself it grazes the
     #                                     curved underside and tears the printed file)
     hubcap: bool = True
     hubcap_r_mm: float = 12.0      # as the disc: 1.5 mm off the track (T3.7)
-    hubcap_t_mm: float = 0.8
+    hubcap_t_mm: float = PRINT_MIN_MM
     material_g_cm3: float = PA12_G_CM3
 
 
@@ -194,6 +200,15 @@ def structure(bs: BeamSupport, outline: list, y_bearing_mm: float, y_fixed_mm: f
             "journal_stress_mpa": float(32 * LOAD_AXIAL_N * R_mm / (math.pi * STUB_D_MM ** 3))}
 
 
+def sized_disc_t_mm(bs: BeamSupport, y_disc_mm: float, y_bearing_mm: float, R_mm: float) -> float:
+    """The disc's thickness: the stub's moment leaves the boss through the
+    disc, half upward to the plate and half downward to the strip, each a
+    strip of disc as wide as the member it feeds, bending out of its plane."""
+    M = LOAD_RADIAL_N * (y_bearing_mm - y_disc_mm) + LOAD_AXIAL_N * R_mm
+    w = min(bs.beam_w_mm, bs.strip_w_mm) if bs.strip else bs.beam_w_mm
+    return max(bs.disc_t_mm, PRINT_MIN_MM, math.sqrt(6 * (M / 2) / (w * PA12_STRENGTH_MPA / SAFETY)))
+
+
 def sized_root_d_mm(bs: BeamSupport, y_disc_mm: float, y_bearing_mm: float, R_mm: float) -> float:
     """The boss diameter at the disc: the larger of the asked boss_d and what
     the root's bending moment needs at the allowed stress."""
@@ -264,6 +279,7 @@ def pod_channel(bs: BeamSupport, body, x_axle_mm: float, z_axle_mm: float, R_mm:
     near = lambda z: v[np.abs(v[:, 2] - z) < 1.5, 1]               # noqa: E731
     return {"x0_mm": x_axle_mm - length / 2, "x1_mm": x_axle_mm + length / 2, "z_arch_mm": z_arch,
             "z_floor_mm": z_floor, "z_body_top_mm": z_top, "wall_mm": bs.pod_wall_mm,
+            "rim_mm": bs.pod_rim_mm,
             "length_mm": length, "y_body_mm": float(v[:, 1].max()),
             # where the plate (just under the roof) leaves the body
             "y_body_at_plate_mm": float(near(z_arch - 1.0).max()) if len(near(z_arch - 1.0)) else 0.0}
@@ -291,12 +307,17 @@ def build(bs: BeamSupport, x_axle_mm: float, z_axle_mm: float, y_inner_mm: float
     import trimesh
     y_out = y_inner_mm + wheel_width_mm
     y_disc = y_inner_mm + bs.disc_recess_mm                # the disc's outer face
-    y_beam_end = y_disc - (bs.disc_t_mm if disc else 0.0)
     y_bear = y_inner_mm + 0.5 * (hub_mm[0] + hub_mm[1])
+    disc_t = sized_disc_t_mm(bs, y_disc, y_bear, R_mm) if disc else 0.0
+    y_beam_end = y_disc - disc_t
     y_tip = y_out - (bs.hubcap_t_mm if bs.hubcap else 0.0)
     root_d = sized_root_d_mm(bs, y_disc, y_bear, R_mm)
     line = stub_outline(bs, y_disc, y_bear, y_tip, root_d)
-    st = dict(structure(bs, line, y_bear, y_disc, R_mm), root_d_mm=root_d, disc=disc)
+    st = dict(structure(bs, line, y_bear, y_disc, R_mm), root_d_mm=root_d, disc=disc,
+              disc_t_mm=disc_t)
+    if disc:
+        w = min(bs.beam_w_mm, bs.strip_w_mm) if bs.strip else bs.beam_w_mm
+        st["disc_stress_mpa"] = 6 * (LOAD_RADIAL_N * (y_bear - y_disc) + LOAD_AXIAL_N * R_mm) / 2             / (w * disc_t ** 2)
     pod = bs.pod and bool(channel) and channel["length_mm"] > 2 * TOOL_R_MM + 1.0
     plate_h, xc = bs.beam_h_mm, x_axle_mm + bs.x_offset_mm
     zc = z_axle_mm + bs.z_offset_mm
@@ -323,7 +344,9 @@ def build(bs: BeamSupport, x_axle_mm: float, z_axle_mm: float, y_inner_mm: float
     else:
         prof += [(line[0][0], y_beam_end - 0.05)]
     prof += line + [(0.0, y_tip)]
-    parts = [_extrude_xz(section(bs_sized), 0.0, y_beam_end + 0.05, xc, zc),
+    # with a pod the plate stops a lap inside it: the pod's roof carries on
+    y_plate0 = max(0.0, channel["y_body_at_plate_mm"] - bs.plate_lap_mm) if pod else 0.0
+    parts = [_extrude_xz(section(bs_sized), y_plate0, y_beam_end + 0.05, xc, zc),
              _revolve_y(prof, x_axle_mm, z_axle_mm)]
     if pod and bs.strip:
         parts.append(_extrude_xz(section(dataclasses.replace(bs, beam_w_mm=bs.strip_w_mm,
@@ -354,6 +377,8 @@ def gates(bs: BeamSupport, meshes: dict, x_axle_mm: float, z_axle_mm: float, R_m
          f"load_{tag}_bearing_sag": SAG_MAX_MM - st["sag_mm"]}
     if "frame_stress_mpa" in st:
         g[f"load_{tag}_frame_stress"] = st["allow_mpa"] - st["frame_stress_mpa"]
+    if "disc_stress_mpa" in st:
+        g[f"load_{tag}_disc_stress"] = st["allow_mpa"] - st["disc_stress_mpa"]
     if not meshes.get("_pod"):   # a bare beam sits in a slot of its own, which the ball must cut
         g[f"machining_{tag}_slot_corner_radius"] = min_curvature_radius_mm(bs) - TOOL_R_MM
     if st["disc"] and bs.disc_recess_mm > 0:      # a disc inside the rim must clear it
