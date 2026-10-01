@@ -44,10 +44,16 @@ class Joint:
     fill: bool = True             # the printed part fills its pocket (a plug)
     plug_full: object = None      # the plug across BOTH halves, for the full machined body
     part: object = None           # the part's right half as cut (one manifold, keep-out removed)
+    printed_whole: object = None  # a pod: the whole printed solid, both halves, as made
+    extra_plastic_cm3: float | None = None    # ... and what it adds to the part, both halves
 
     def mass_delta_kg(self, part_density_g_cm3: float) -> float:
         """Full-car (both halves) mass change vs 'foam body + whole part',
         which is what the mass rollup counted before joints existed."""
+        if self.extra_plastic_cm3 is not None:
+            # a pod: a hollow shell in place of the foam the channel removes
+            return (self.extra_plastic_cm3 * part_density_g_cm3
+                    - 2 * self.pocket_cm3 * FOAM_G_CM3) * 1e-3
         if not self.fill:
             # the part keeps its designed shape inside the slot (the team's
             # ribbed CAD beam): only the foam cut out of the slot changes
@@ -201,6 +207,71 @@ def cut(name: str, part, body_half, open_side: str = "bottom", keep_out=None,
                  fill=fill, plug_full=plug_full, part=part)
 
 
+def pod_joint(part, body_half, channels: dict, keep_out=None) -> Joint | None:
+    """The supports as pods (beam_support.py): at each axle the channel is
+    milled from below across the whole width, and the printed support is the
+    body's own shape there, hollowed to the wall thickness, with the plate,
+    strip, disc and stub joined on. A 4 mm hole in the roof (under the foam,
+    so sealed once glued) lets the unsintered powder out."""
+    import manifold3d as m3
+    import trimesh
+    import beam_support as bsm
+
+    def man(t):
+        return m3.Manifold(m3.Mesh(vert_properties=np.array(t.vertices, np.float32, order="C"),
+                                   tri_verts=np.array(t.faces, np.uint32, order="C")))
+
+    def tm(M):
+        # as manifold made it: merging vertices by position would pinch it
+        o = M.to_mesh()
+        return trimesh.Trimesh(np.asarray(o.vert_properties)[:, :3], np.asarray(o.tri_verts),
+                               process=False)
+
+    pieces = part.split(only_watertight=False)
+    if len(pieces) > 1:
+        part = _bool("union", list(pieces))
+    y_max = body_half.bounds[1, 1] * 1e3 + 1.0
+    plug = trimesh.util.concatenate([_prism_y(bsm.channel_outline(ch), 0.0, y_max)
+                                     for ch in channels.values()])
+    plug_full = trimesh.util.concatenate([_prism_y(bsm.channel_outline(ch), -y_max, y_max)
+                                          for ch in channels.values()])
+    if keep_out is not None:
+        plug = _bool("difference", [plug, keep_out])
+        plug_full = _bool("difference", [plug_full, keep_out])
+    pocket = _bool("intersection", [plug, body_half])
+    if pocket is None or pocket.is_empty or abs(pocket.volume) < 1e-12:
+        return None
+    body_full = man(_full(body_half))
+    shells, drains = [], []
+    for ch in channels.values():
+        one = _prism_y(bsm.channel_outline(ch), -y_max, y_max)
+        if keep_out is not None:
+            one = _bool("difference", [one, keep_out])
+        lump = body_full ^ man(one)
+        cavity = lump.minkowski_difference(m3.Manifold.sphere(ch["wall_mm"] * 1e-3, 12))
+        if cavity.is_empty():
+            shells.append(lump)
+            continue
+        shells.append(lump - cavity)
+        bb = cavity.bounding_box()
+        drain = trimesh.creation.cylinder(radius=2e-3, height=bb[5] - bb[2] + 4e-3, sections=24)
+        drain.apply_translation([(bb[0] + bb[3]) / 2, 0.0, (bb[2] + bb[5]) / 2 + 2e-3])
+        drains.append(man(drain))
+    # the drains last: through the roof AND the plate lying in it
+    whole = m3.Manifold.batch_boolean(shells + [man(_full(part))], m3.OpType.Add)
+    if drains:
+        whole = whole - m3.Manifold.batch_boolean(drains, m3.OpType.Add)
+    # crumbs (under 1 mm3) the hollowing leaves where the wall is thinner than itself
+    whole = m3.Manifold.batch_boolean([c for c in whole.decompose() if c.volume() > 1e-9 * 1e-3],
+                                      m3.OpType.Add)
+    embedded = _bool("intersection", [part, body_half])
+    return Joint("supports", "bottom", plug, pocket, None,
+                 pocket_cm3=abs(pocket.volume) * 1e6,
+                 embedded_cm3=0.0 if embedded is None or embedded.is_empty else abs(embedded.volume) * 1e6,
+                 plug_full=plug_full, part=part, printed_whole=tm(whole),
+                 extra_plastic_cm3=(whole.volume() - 2 * abs(part.volume)) * 1e6)
+
+
 def machined_body(body_half, joints, x_ref_a_mm: float | None = None):
     """The body the mill makes: aero body minus every pocket, minus the nose
     ahead of Ref A (printed separately)."""
@@ -267,8 +338,10 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
     cad_supports = assembly.get("support") is None
     for name, mesh in parts.items():
         fill = not (name == "supports" and cad_supports)
-        j = cut(name, mesh, milled, OPEN_SIDE.get(name, "bottom"), ko,
-                embed_mm=None if name == "supports" else 4.0, fill=fill)
+        pods = assembly.get("info", {}).get("pod") if name == "supports" else None
+        j = pod_joint(mesh, milled, pods, ko) if pods else cut(
+            name, mesh, milled, OPEN_SIDE.get(name, "bottom"), ko,
+            embed_mm=None if name == "supports" else 4.0, fill=fill)
         dm = 0.0
         if j is None:
             report["parts"][name] = {"joint": "surface bond (no pocket possible)"}
@@ -307,6 +380,8 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
         (part U (plug n body)) - machined body: the whole part overlaps the
         plug it sits in, so no two solids that merely TOUCH are ever unioned
         (that, and fusing pocketed halves, is what tore these files)."""
+        if j.printed_whole is not None:           # a pod is already the whole printed solid
+            return _drop_dust(_bool("difference", [j.printed_whole, body_full]), 1e-9)
         if not j.fill:
             return _full(j.printed)
         inside = _bool("intersection", [j.plug_full, clean_body])

@@ -169,8 +169,18 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
         for tag, x, y_in, w, disc, hub in zip(
                 ("front", "rear"), (x_front_mm, x_rear), (FY, RY), (f.total_width, r.total_width),
                 (support.disc_front, support.disc_rear), wh.hub_span_mm()):
-            bm = bsm.build(support, x, R - SINK_MM, y_in, w, disc, hub_mm=hub, R_mm=R)
+            # the pod's channel comes from THIS body at this axle, so the
+            # support follows the body through the search and the sizing
+            ch = bsm.pod_channel(support, body, x, R - SINK_MM, R) if support.pod else {}
+            bm = bsm.build(support, x, R - SINK_MM, y_in, w, disc, hub_mm=hub, R_mm=R, channel=ch)
             gates.update(bsm.gates(support, bm, x, R - SINK_MM, R, tag))
+            if bm["_pod"]:
+                info.setdefault("pod", {})[tag] = ch
+                half = ch["length_mm"] / 2
+                corner = max(math.hypot(half, R - SINK_MM - ch["z_floor_mm"]),
+                             math.hypot(half, ch["z_arch_mm"] - (R - SINK_MM)))
+                gates[f"T7.12.1_{tag}_pod_in_cylinder"] = R - corner
+                gates[f"machining_{tag}_foam_over_pod"] = ch["z_body_top_mm"] - ch["z_arch_mm"] - 4.0
             sup.append(bm["support"])
             support_kg.append(bsm.mass_kg(support, bm) / 2)      # per side, hubcap included
             info.setdefault("support_structure", {})[tag] = bm["_struct"]

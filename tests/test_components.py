@@ -156,27 +156,41 @@ def test_manufacturing_files_are_whole_closed_parts_in_mm():
 
 
 def test_support_follows_the_team_format_and_carries_the_loads():
-    """Disc, flared boss and stub axle are one piece with the beam; the stub
-    has a shoulder and a 3 mm journal where the 3x6x2.5 bearing sits; the
-    hubcap is its own closed part; and the boss grows when the loads do."""
+    """Plate, strip, disc, flared boss and stub axle are one piece; the stub
+    has a shoulder and a 3 mm journal where the 3x6x2.5 bearing sits; the pod's
+    channel comes from the body; the hubcap is its own closed part; and the
+    members grow when the loads or the layout ask for it."""
+    import dataclasses
+    import trimesh
     import beam_support as bsm
     import wheel as wh
     front_hub, _rear_hub = wh.hub_span_mm()
     assert 4.0 < front_hub[0] < front_hub[1] < 9.0 and abs(front_hub[1] - front_hub[0] - 3.0) < 0.1
     bs = bsm.BeamSupport()
     y_in, w, x, z, R = 23.25, 13.25, 46.0, 13.82, 14.12
-    out = bsm.build(bs, x, z, y_in, w, True, hub_mm=front_hub, R_mm=R)
+    body = trimesh.creation.box(bounds=[[0.030, 0.0, 0.005], [0.222, 0.015, 0.028]])
+    ch = bsm.pod_channel(bs, body, x, z, R)
+    # the channel is the body's: from its floor, 4 mm of foam left above, inside the wheels' cylinder
+    assert abs(ch["z_floor_mm"] - 5.0) < 1e-6 and ch["z_arch_mm"] <= 28.0 - 4.0 + 1e-9
+    assert ch["length_mm"] <= bs.pod_len_mm and np.hypot(ch["length_mm"] / 2, z - 5.0) <= R - 0.3 + 1e-9
+    out = bsm.build(bs, x, z, y_in, w, True, hub_mm=front_hub, R_mm=R, channel=ch)
     part, cap = out["support"], out["hubcap"]
-    assert part.is_watertight and len(part.split(only_watertight=False)) == 1
+    assert out["_pod"] and part.is_watertight and len(part.split(only_watertight=False)) == 1
     assert cap.is_watertight and abs(cap.bounds[1, 1] * 1e3 - (y_in + w)) < 1e-6      # flush outside
     y_bear = y_in + 0.5 * sum(front_hub)
-    def radius_at(y_mm):          # the part's radius about the axle, on the plane y
+
+    def radius_at(y_mm):          # the stub's radius about the axle, on the plane y
         sec = part.section(plane_origin=[0, y_mm / 1e3, 0], plane_normal=[0, 1, 0]).vertices * 1e3
         return np.hypot(sec[:, 0] - x, sec[:, 2] - z).max()
     assert abs(radius_at(y_bear) - 1.5) < 0.02                                        # the journal
     assert abs(radius_at(y_bear - 1.4) - bs.shoulder_d_mm / 2) < 0.02                 # the shoulder
     g = bsm.gates(bs, out, x, z, R, "front")
     assert all(m >= 0 for m in g.values()), {k: m for k, m in g.items() if m < 0}
+    # without the strip the plate alone must carry the bending: it is made thicker
+    alone = bsm.build(dataclasses.replace(bs, strip=False), x, z, y_in, w, True, hub_mm=front_hub,
+                      R_mm=R, channel=ch)
+    assert alone["_struct"]["plate_h_mm"] > 1.5 * out["_struct"]["plate_h_mm"]
+    assert bsm.SAG_MAX_MM - alone["_struct"]["sag_mm"] >= -1e-9
     # a harder radial load asks for a thicker boss at the disc
     y_disc = y_in + bs.disc_recess_mm
     d0 = bsm.sized_root_d_mm(bs, y_disc, y_bear, R)
