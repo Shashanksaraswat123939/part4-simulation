@@ -153,3 +153,36 @@ def test_manufacturing_files_are_whole_closed_parts_in_mm():
             for b_ in keys[i + 1:]:
                 inter = joints._bool("intersection", [solids[a_], solids[b_]])
                 assert inter.is_empty or abs(inter.volume) < 1.0, (a_, b_, abs(inter.volume))
+
+
+def test_support_follows_the_team_format_and_carries_the_loads():
+    """Disc, flared boss and stub axle are one piece with the beam; the stub
+    has a shoulder and a 3 mm journal where the 3x6x2.5 bearing sits; the
+    hubcap is its own closed part; and the boss grows when the loads do."""
+    import beam_support as bsm
+    import wheel as wh
+    front_hub, _rear_hub = wh.hub_span_mm()
+    assert 4.0 < front_hub[0] < front_hub[1] < 9.0 and abs(front_hub[1] - front_hub[0] - 3.0) < 0.1
+    bs = bsm.BeamSupport()
+    y_in, w, x, z, R = 23.25, 13.25, 46.0, 13.82, 14.12
+    out = bsm.build(bs, x, z, y_in, w, True, hub_mm=front_hub, R_mm=R)
+    part, cap = out["support"], out["hubcap"]
+    assert part.is_watertight and len(part.split(only_watertight=False)) == 1
+    assert cap.is_watertight and abs(cap.bounds[1, 1] * 1e3 - (y_in + w)) < 1e-6      # flush outside
+    y_bear = y_in + 0.5 * sum(front_hub)
+    def radius_at(y_mm):          # the part's radius about the axle, on the plane y
+        sec = part.section(plane_origin=[0, y_mm / 1e3, 0], plane_normal=[0, 1, 0]).vertices * 1e3
+        return np.hypot(sec[:, 0] - x, sec[:, 2] - z).max()
+    assert abs(radius_at(y_bear) - 1.5) < 0.02                                        # the journal
+    assert abs(radius_at(y_bear - 1.4) - bs.shoulder_d_mm / 2) < 0.02                 # the shoulder
+    g = bsm.gates(bs, out, x, z, R, "front")
+    assert all(m >= 0 for m in g.values()), {k: m for k, m in g.items() if m < 0}
+    # a harder radial load asks for a thicker boss at the disc
+    y_disc = y_in + bs.disc_recess_mm
+    d0 = bsm.sized_root_d_mm(bs, y_disc, y_bear, R)
+    old = bsm.LOAD_RADIAL_N
+    try:
+        bsm.LOAD_RADIAL_N = 10 * old
+        assert bsm.sized_root_d_mm(bs, y_disc, y_bear, R) > d0
+    finally:
+        bsm.LOAD_RADIAL_N = old

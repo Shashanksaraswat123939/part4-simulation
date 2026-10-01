@@ -351,9 +351,20 @@ def make_all(body_half, assembly: dict, x_ref_a_mm: float, rear_face_mm: float,
         sup = front_rear(P.pop("supports"))
         teth = front_rear(P.pop("tethers")) if "tethers" in P else (None, None)
         for tag, a_, b_ in zip(("front", "rear"), sup, teth):
-            if a_ is not None:
-                made[f"printed_support_{tag}"] = (
-                    _drop_dust(_bool("union", [a_, b_]), 1e-9) if b_ is not None else a_, pa12, 1)
+            if a_ is None:
+                continue
+            u = _drop_dust(_bool("union", [a_, b_]), 1e-9) if b_ is not None else a_
+            pieces = sorted(u.split(only_watertight=False), key=lambda q: -abs(q.volume))
+            made[f"printed_support_{tag}"] = (pieces[0], pa12, 1)
+            if len(pieces) > 1:       # a guide the support does not reach is its own part
+                made[f"printed_tether_{tag}"] = (trimesh.util.concatenate(pieces[1:]),
+                                                  DENSITY_G_CM3["tethers"], len(pieces) - 1)
+    for tag, path in assembly.get("info", {}).get("hubcap_stls", {}).items():
+        cap = trimesh.load(path, force="mesh")           # right side; the left is its mirror
+        left = cap.copy()
+        left.vertices[:, 1] *= -1
+        left.invert()
+        made[f"printed_hubcaps_{tag}"] = (trimesh.util.concatenate([cap, left]), pa12, 2)
     front = [P.pop(k) for k in ("nose", "fwing") if k in P]
     if front:
         solid = _bool("union", front) if len(front) > 1 else front[0]

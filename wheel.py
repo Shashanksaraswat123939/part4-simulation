@@ -80,6 +80,23 @@ def team_wheel_meshes() -> list:
     return out
 
 
+def hub_span_mm() -> tuple:
+    """(front, rear): where each wheel's hub (its bearing seat) lies along the
+    axle, mm from the wheel's INNER face. In the team's files the wheel sits
+    on the +axis side of the car, so its inner face is the low end."""
+    import trimesh
+    out = []
+    for name in ("front_wheel.stl", "rear_wheel.stl"):
+        m = trimesh.load(str(CAD / name), force="mesh")
+        ax = int(np.argmin(m.bounds[1] - m.bounds[0]))
+        c = (m.bounds[0] + m.bounds[1]) / 2
+        v = m.vertices - c
+        hub = np.hypot(*np.delete(v, ax, axis=1).T) < 5.5
+        lo = float(m.bounds[0][ax] - c[ax])
+        out.append((float(v[hub, ax].min()) - lo, float(v[hub, ax].max()) - lo))
+    return tuple(out)
+
+
 def design(name: str = "team_stl") -> tuple:
     """(front, rear) MeasuredWheel. The hub is 3 mm long: ONE 2.5 mm bearing."""
     if name != "team_stl":

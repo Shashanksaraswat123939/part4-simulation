@@ -166,12 +166,19 @@ def build(W_mm: float, x_front_mm: float, d_halo_mm: float, body_half_stl: str,
         # The team's architecture, parametric: one PA12 beam per axle through
         # the body, stub axles, optional wheel-face discs.
         sup, support_kg = [], []
-        for tag, x, y_in, w, disc in (("front", x_front_mm, FY, f.total_width, support.disc_front),
-                                      ("rear", x_rear, RY, r.total_width, support.disc_rear)):
-            bm = bsm.build(support, x, R - SINK_MM, y_in, w, disc)
+        for tag, x, y_in, w, disc, hub in zip(
+                ("front", "rear"), (x_front_mm, x_rear), (FY, RY), (f.total_width, r.total_width),
+                (support.disc_front, support.disc_rear), wh.hub_span_mm()):
+            bm = bsm.build(support, x, R - SINK_MM, y_in, w, disc, hub_mm=hub, R_mm=R)
             gates.update(bsm.gates(support, bm, x, R - SINK_MM, R, tag))
             sup.append(bm["support"])
-            support_kg.append(bsm.mass_kg(support, bm) / 2)      # per side
+            support_kg.append(bsm.mass_kg(support, bm) / 2)      # per side, hubcap included
+            info.setdefault("support_structure", {})[tag] = bm["_struct"]
+            if bm["hubcap"] is not None:
+                # its own printed part (pressed on the stub's end): not a CFD
+                # surface, it sits flush inside the wheel's disc
+                bm["hubcap"].export(str(out / f"hubcap_{tag}.stl"))
+                info.setdefault("hubcap_stls", {})[tag] = str(out / f"hubcap_{tag}.stl")
         support_kg = tuple(support_kg)
     _export_half(trimesh.util.concatenate(sup), out / "supports.stl")
     surfaces.append({"name": "supports", "stl": str(out / "supports.stl"), "rotating": None})
