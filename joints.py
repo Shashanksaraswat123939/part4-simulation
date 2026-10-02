@@ -529,7 +529,12 @@ def _export_mm(mesh, path) -> dict:
     # back: zero volume, and four faces on each of its edges. Remove both.
     key = np.sort(tm.faces, axis=1)
     _u, inv, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
-    tm.update_faces((cnt[inv.ravel()] == 1) & tm.nondegenerate_faces())
+    # Only faces that lost a vertex go: a zero-area triangle on three distinct
+    # collinear vertices is what joins a T-junction, and dropping it opens the
+    # surface along a line (front support at the pod's end, 2 Oct 2026).
+    f = tm.faces
+    kept = (f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 0] != f[:, 2])
+    tm.update_faces((cnt[inv.ravel()] == 1) & kept)
     tm.remove_unreferenced_vertices()
     _drop_dust(tm, 1.0).export(str(path))
     back = trimesh.load(str(path), force="mesh")
